@@ -1,0 +1,34 @@
+[project]
+name = "tokenstar"
+version = "0.1.0"
+description = "TokenStar local read-only Gemini & Antigravity conversation observatory"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "mcp>=2.0.0",
+    "pydantic>=2.7.0",
+    "starlette>=0.40.0",
+    "uvicorn>=0.30.0",
+]
+
+[project.scripts]
+tokenstar-mcp = "tokenstar.mcp_server:main"
+tokenstar-web = "tokenstar.web_server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tokenstar"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

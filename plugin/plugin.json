@@ -1,0 +1,12 @@
+{
+  "name": "tokenstar",
+  "displayName": "TokenStar",
+  "version": "0.1.0",
+  "description": "Interactive starry-sky observatory and token usage analytics for local Antigravity conversation logs.",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "打开 TokenStar 星空，查看我最近的 Antigravity 对话星图与 Token 消耗总览",
+    "打开 TokenStar，分析各模型和对话的 Token 用量分布与统计详情",
+    "打开 TokenStar 星空，按星座与星体类型探索双星、脉冲星和黑洞对话"
+  ]
+}

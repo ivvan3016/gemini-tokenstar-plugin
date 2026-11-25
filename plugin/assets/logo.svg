@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="ts-star-fill" x1="36" y1="28" x2="92" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FEF08A" />
+      <stop offset="50%" stop-color="#FBBF24" />
+      <stop offset="100%" stop-color="#D97706" />
+    </linearGradient>
+    <linearGradient id="ts-orbit-stroke" x1="18" y1="88" x2="110" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2563EB" />
+      <stop offset="50%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#6366F1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Subtle outer orbital halo -->
+  <circle cx="64" cy="64" r="34" stroke="#6366F1" stroke-opacity="0.45" stroke-width="2" stroke-dasharray="5 5" />
+
+  <!-- Tilted celestial orbital ring (back half) -->
+  <ellipse
+    cx="64"
+    cy="64"
+    rx="45"
+    ry="16"
+    transform="rotate(-28 64 64)"
+    stroke="url(#ts-orbit-stroke)"
+    stroke-width="3"
+    stroke-linecap="round"
+  />
+
+  <!-- Companion constellation stars -->
+  <circle cx="96" cy="31" r="4.5" fill="#38BDF8" stroke="#1E293B" stroke-width="1.75" />
+  <circle cx="31" cy="95" r="3.5" fill="#FBBF24" stroke="#1E293B" stroke-width="1.5" />
+
+  <!-- Central 8-point celestial star with high-contrast slate border -->
+  <path
+    d="M64 25 L70 50 L85 43 L78 58 L103 64 L78 70 L85 85 L70 78 L64 103 L58 78 L43 85 L50 70 L25 64 L50 58 L43 43 L58 50 Z"
+    fill="url(#ts-star-fill)"
+    stroke="#1E293B"
+    stroke-width="2.5"
+    stroke-linejoin="round"
+  />
+
+  <!-- Crisp inner star core highlight -->
+  <circle cx="64" cy="64" r="5" fill="#FFFFFF" fill-opacity="0.9" stroke="#1E293B" stroke-width="1.25" />
+</svg>

@@ -1,0 +1,190 @@
+<div align="center">
+
+<img src="plugin/assets/logo.svg" alt="TokenStar Logo" width="108" height="108" />
+
+# TokenStar
+
+**面向 Antigravity 的 WebGL 1.0 实时星空可视化与 Token 统计分析插件**
+
+[![Antigravity MCP App](https://img.shields.io/badge/Antigravity-MCP%20App-38bdf8?style=flat-square)](plugin/plugin.json)
+[![Python 3.12–3.13](https://img.shields.io/badge/Python-3.12%E2%80%933.13-3776ab?style=flat-square)](backend/pyproject.toml)
+[![React 19 + WebGL](https://img.shields.io/badge/Frontend-React%2019%20%2B%20WebGL-61dafb?style=flat-square)](frontend/package.json)
+[![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b?style=flat-square)](LICENSE)
+
+[English](README.md) | **简体中文**
+
+</div>
+
+---
+
+**TokenStar** 将本地 Antigravity 与 Gemini 对话日志映射为一片可实时交互的写实星空。每一次模型请求对应一颗独立恒星，同一段对话内的主代理与子代理步骤通过无交叉连线织成互不重叠的天文星座；同时内置多维统计仪表盘，呈现每日 Token 热力图、模型分布及明细检索。
+
+插件支持两种运行形态：**Antigravity MCP App 插件模式**（`tokenstar-mcp`，直接嵌入侧栏、辅助栏或对话内）与 **独立 Web 服务模式**（`tokenstar-web`，在桌面浏览器中运行）。
+
+## 核心特性
+
+- **WebGL 1.0 实时光学星图渲染**：6 套 GPU 着色程序协同绘制倾斜银河全景、视差深空星表、世界空间 FBM 发射/反射星云、Moffat PSF 光学星点（带哈勃/韦布式十字/八芒色散星芒）、前景星尘粒子，以及沿星座键流动的微光脉冲。
+- **单次请求成星 · 星座互不重叠**：根据会话体量自适应呈丝状星弧、多星团 OB 协星或疏散星团形态（`starLayout.ts`），使用 Prim 最小生成树连接对话节点（`constellations.ts`），并通过二维圆填充隔离确保不同会话星群互不遮挡。
+- **五类天体行为隐喻**：依据错误比例、子代理协同、工具调用密度与轻量交互特征，自动划分主序恒星、双星、斜转子脉冲星、引力透镜黑洞与太阳风彗星。
+- **真实天体物理视觉映射**：结合全局对数相对分位与绝对对数标度区分 Token 用量等级，并基于现实 **O-B-A-F-G-K-M** 恒星黑体辐射光谱（约 30,000K O 型蓝巨星至 3,100K M 型红巨星）呈现细腻色温分布。
+- **天文台级交互与导出**：支持平滑平移惯性滑行、指针居中缩放、时间轴演化回放、星体/模型/关键词/日期高亮筛选、赤道坐标网格 / 连线 / 星云显隐开关、隐私脱敏模式，以及 2x PNG 星空壁纸 / 纪念卡片导出。
+- **双模无缝传输**：在 Antigravity iframe 内通过 SEP-1865 MCP App JSON-RPC（`@modelcontextprotocol/ext-apps`）通信；在独立浏览器访问时自动切换为本地 HTTP 接口（`/api/sky-data`、`/api/refresh`）。
+
+## 天文映射规则
+
+### 天体分类体系（按严格优先级判定）
+
+| 天体类型 | WebGL 实时视觉特征 | 单次请求判定条件 | 整段会话判定条件 |
+| :--- | :--- | :--- | :--- |
+| **黑洞** | 星际穿越风格引力透镜吸积盘、光子环与事件视界遮罩 | 状态为 `ERROR` / `FAILED` / `CANCELLED` / `ABORTED` | 异常终止状态或错误步骤占比 `>= 30%` |
+| **双星** | 开普勒双星轨道运转、冷暖光谱互补及洛希瓣物质流 | 调用子代理 `>= 1` 次（`invoke_subagent` / `swarm`） | 会话内调用 `>= 1` 次子代理协同 |
+| **脉冲星** | 固定自旋赤道风环、微倾斜转子进动双极射流与多普勒脉冲 | 单步并行工具调用 `>= 8` 次 | 会话累计工具调用 `>= 40` 次 |
+| **彗星** | 椭圆彗发、曲面尘埃扇尾与太阳风离子波结 | 工具调用为 `0` 且总 Token `< 15K` | 交互 `<= 2` 轮、工具 `<= 2` 次且 `< 50K` |
+| **恒星** | 光学 Moffat 星核、星冕光晕与高亮巨星衍射星芒 | 其余常规深度推理请求 | 其余常规深度多轮对话 |
+
+### 亮度、尺寸与光谱色
+
+- **Token 用量 → 星等与星核尺度**：融合当前全部请求对数用量的 `p05`–`p98` 相对分位（权重 `0.82`）与绝对对数标度 `(log10(tokens) - 3.0) / 3.0`（权重 `0.18`），映射至 `[0.12, 1.0]` 星等与非线性 `0.9–5.4 px` 星核半径，联动星冕亮度、衍射星芒与镜头炫光分级呈现。
+- **模型家族 + 真实黑体光谱色**：以 **O-B-A-F-G-K-M** 7 阶黑体色谱（`#68a4ff` → `#94c4ff` → `#dcebff` → `#fff5de` → `#ffdc84` → `#ffa654` → `#ff6e46`）为模型分配主导色温带，并叠加确定的单星赫罗图（H-R）色温色散，仅对极亮星核中心保留白炽高光，避免高亮全白化。
+
+## 系统架构
+
+```mermaid
+flowchart LR
+  Logs["本地对话日志 (~/.gemini/antigravity/brain)"] -->|"严格只读扫描 + 内存增量缓存"| Backend["Python 后端 (scanner, classifier)"]
+  Backend -->|"tokenstar-mcp (stdio / SEP-1865)"| Host["Antigravity MCP App 视图"]
+  Backend -->|"tokenstar-web (HTTP / Starlette)"| Browser["独立桌面浏览器"]
+  Bundle["单文件前端包 (dist/app.html)"] -->|"ui://tokenstar/app.html"| Host
+  Bundle -->|"GET /"| Browser
+  Host -->|"open_tokenstar / tokenstar_get_sky_data"| UI["React 19 + WebGL 1.0 星空"]
+  Browser -->|"GET /api/sky-data"| UI
+```
+
+## 隐私与本地只读保障
+
+- **严格只读扫描**：仅以只读方式解析 `~/.gemini/antigravity/brain`（可通过 `TOKENSTAR_BRAIN_DIR` 或 `--brain-dir` 覆盖）与 `~/.gemini/tmp`，绝不写入、修改或删除任何对话日志与宿主文件。
+- **零侵入安装**：安装脚本仅将文件部署至独立插件目录 `~/.gemini/config/plugins/tokenstar`，绝不改写 `~/.gemini/config/config.json` 或任何 Antigravity 核心文件。
+- **100% 离线自包含界面**：构建产物 `dist/app.html` 将全部 JS、CSS 与着色器内联于单个 HTML 文件中（约 831 KiB，`< 10 MiB` 上限），不含任何外部网络或 CDN 引用。
+- **纯内存增量索引**：文件指纹与汇总索引仅在服务端进程内存中缓存。
+
+## 环境要求
+
+- **Python 3.12–3.13** 与 [`uv`](https://docs.astral.sh/uv/)
+- **Node.js (>= 20) 与 npm**（存在 `.tools/nodejs` 时构建脚本会自动优先使用）
+- **Antigravity**（如需作为 MCP App 插件运行；独立 Web 模式无需启动 Antigravity）
+
+## 快速开始
+
+### 1. 构建单文件前端产物与完整校验
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build.ps1
+```
+
+macOS / Linux 环境手动构建：
+
+```bash
+npm --prefix frontend install && npm --prefix frontend run build
+uv --project backend sync --no-dev
+```
+
+### 2. 方式 A：安装为 Antigravity MCP App 插件
+
+一键打包并安装至 `~/.gemini/config/plugins/tokenstar`（自动通过 `uv sync --no-dev` 初始化隔离虚拟环境）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-plugin.ps1
+```
+
+可选参数：
+
+| 参数 | 说明 |
+| :--- | :--- |
+| `-TargetDir <path>` | 自定义插件安装目录（默认 `"$HOME\.gemini\config\plugins\tokenstar"`） |
+| `-SkipBuild` | 复用已有 `dist/app.html`，跳过前端构建与测试步骤 |
+| `-SkipSync` | 跳过 `uv --project <TargetDir>\server sync --no-dev`（仅用于离线 CI 打包校验） |
+
+安装完成后 Antigravity 会自动发现该插件，可通过以下任意方式打开：
+
+- 在 Antigravity **左侧导航栏**点击 **TokenStar** 全屏查看；
+- 在右侧辅助栏右上角 **`+`** 菜单中选择 **TokenStar** 侧边打开；
+- 在对话中直接让助手调用 `open_tokenstar` 打开交互视图。
+
+#### 卸载插件
+
+直接删除插件隔离目录即可（无任何全局配置残留）：
+
+```powershell
+Remove-Item -Recurse -Force "$HOME\.gemini\config\plugins\tokenstar"
+```
+
+### 3. 方式 B：独立 Web 模式运行
+
+启动本地 Starlette 服务并在默认浏览器中打开观测界面：
+
+```powershell
+uv --project backend run tokenstar-web --open
+```
+
+`tokenstar-web` 支持的命令行参数：
+
+| 参数 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `--brain-dir <path>` | `~/.gemini/antigravity/brain` | 指定只读对话日志目录（或设置 `TOKENSTAR_BRAIN_DIR`） |
+| `--host <addr>` | `127.0.0.1` | 监听主机地址 |
+| `--port <num>` | `18420` | 起始端口（若占用会自动向后顺延探测最多 20 个端口） |
+| `--html-path <path>` | `dist/app.html` | 指定编译后的单文件 HTML 路径（或设置 `TOKENSTAR_APP_HTML`） |
+| `--open` | `false` | 服务就绪后自动打开默认浏览器 |
+
+## 开发与测试
+
+执行完整构建与前后端测试流水线（`tsc --noEmit`、Vitest 单测、单文件 `dist/app.html` 体积与零外链审计、后端 Pytest 测试）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build.ps1
+```
+
+分模块单独测试命令：
+
+```powershell
+npm --prefix frontend run typecheck
+npm --prefix frontend run test
+uv --project backend run pytest backend/tests -v
+```
+
+## 项目结构
+
+```text
+tokenstar-plugin/
+├── backend/
+│   ├── src/tokenstar/
+│   │   ├── sources/        # Antigravity / Gemini CLI 只读日志适配器
+│   │   ├── classifier.py   # 严格优先级天体分类器
+│   │   ├── config.py       # 分类阈值与默认路径配置
+│   │   ├── scanner.py      # 子代理树汇总与内存增量扫描缓存
+│   │   ├── mcp_server.py   # SEP-1865 MCP App 服务端 (tokenstar-mcp)
+│   │   └── web_server.py   # 独立 Web HTTP 服务端 (tokenstar-web)
+│   └── tests/              # Pytest 单元测试与服务集成测试
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── sky/        # WebGL 1.0 渲染器、2D 叠层、HUD 与详情抽屉
+│   │   │   └── stats/      # 每日热力图、模型分布与会话统计表
+│   │   ├── logic/          # 星图布局算法、MST 连线与多维过滤统计
+│   │   └── services/       # MCP App / HTTP 双模传输层
+│   └── package.json
+├── plugin/
+│   ├── assets/logo.svg     # 插件图标资源
+│   ├── mcp_config.json     # 使用 ${PLUGIN_ROOT} 的 MCP 服务定义
+│   └── plugin.json         # Antigravity 插件元信息与推荐提示词
+├── scripts/
+│   ├── build.ps1           # 全量验证与单文件构建脚本
+│   └── install-plugin.ps1  # 隔离插件打包与 uv 环境同步脚本
+├── LICENSE                 # MIT 开源协议
+├── README.md               # 英文主文档
+└── README_zh.md            # 简体中文文档
+```
+
+## 开源协议
+
+本项目基于 [MIT License](LICENSE) 开源。

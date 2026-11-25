@@ -1,0 +1,29 @@
+# Local toolchains, build artifacts, and internal design notes
+.tools/
+dist/
+docs/
+
+# Python virtual environments, caches, and packaging outputs
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+**/.pytest_cache/
+
+# Node dependencies and Vite outputs
+node_modules/
+**/node_modules/
+frontend/dist/
+npm-debug.log*
+
+# OS, editor, and temporary files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+*.env
+.env.*

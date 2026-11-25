@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "tokenstar": {
+      "command": "uv",
+      "args": ["run", "--project", "${PLUGIN_ROOT}/server", "tokenstar-mcp"],
+      "env": {
+        "TOKENSTAR_APP_HTML": "${PLUGIN_ROOT}/dist/app.html"
+      }
+    }
+  }
+}
