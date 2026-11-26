@@ -2,6 +2,7 @@
 .tools/
 dist/
 docs/
+promo/
 
 # Python virtual environments, caches, and packaging outputs
 .venv/
