@@ -85,7 +85,7 @@ Download the prebuilt `tokenstar-plugin.zip` asset from [GitHub Releases](https:
 $dest = Join-Path $HOME '.gemini\config\plugins\tokenstar'
 $zip = Join-Path $env:TEMP 'tokenstar-plugin.zip'
 Invoke-WebRequest 'https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/latest/download/tokenstar-plugin.zip' -OutFile $zip
-foreach ($p in 'plugin.json','mcp_config.json','assets','dist','server') { Remove-Item -Recurse -Force (Join-Path $dest $p) -ErrorAction SilentlyContinue }
+foreach ($p in 'plugin.json','mcp_config.json','assets','dist','server\pyproject.toml','server\uv.lock','server\src') { Remove-Item -Recurse -Force (Join-Path $dest $p) -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Path $dest -Force | Out-Null
 Expand-Archive -Path $zip -DestinationPath $dest -Force
 uv --project (Join-Path $dest 'server') sync --no-dev
@@ -97,7 +97,7 @@ uv --project (Join-Path $dest 'server') sync --no-dev
 DEST="$HOME/.gemini/config/plugins/tokenstar"
 TMP_ZIP="$(mktemp -t tokenstar-plugin.XXXXXX.zip)"
 curl -fL 'https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/latest/download/tokenstar-plugin.zip' -o "$TMP_ZIP"
-rm -rf "$DEST/plugin.json" "$DEST/mcp_config.json" "$DEST/assets" "$DEST/dist" "$DEST/server"
+rm -rf "$DEST/plugin.json" "$DEST/mcp_config.json" "$DEST/assets" "$DEST/dist" "$DEST/server/pyproject.toml" "$DEST/server/uv.lock" "$DEST/server/src"
 mkdir -p "$DEST" && unzip -o "$TMP_ZIP" -d "$DEST" && rm -f "$TMP_ZIP"
 uv --project "$DEST/server" sync --no-dev
 ```

@@ -160,7 +160,7 @@ done
 echo "==> Staging TokenStar plugin into $TARGET_DIR"
 mkdir -p "$TARGET_DIR"
 
-for managed in plugin.json mcp_config.json assets dist server; do
+for managed in plugin.json mcp_config.json assets dist server/pyproject.toml server/uv.lock server/src; do
   rm -rf "$TARGET_DIR/$managed"
 done
 

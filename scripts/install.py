@@ -22,7 +22,15 @@ from pathlib import Path, PurePosixPath
 
 REPO = "ivvan3016/gemini-tokenstar-plugin"
 DEFAULT_TARGET = Path.home() / ".gemini" / "config" / "plugins" / "tokenstar"
-MANAGED_ENTRIES = ("plugin.json", "mcp_config.json", "assets", "dist", "server")
+MANAGED_ENTRIES = (
+    "plugin.json",
+    "mcp_config.json",
+    "assets",
+    "dist",
+    "server/pyproject.toml",
+    "server/uv.lock",
+    "server/src",
+)
 REQUIRED_BUNDLE_FILES = (
     "plugin.json",
     "mcp_config.json",
@@ -199,7 +207,7 @@ def clean_managed_entries(target_dir: Path) -> None:
     """Create target_dir and remove only TokenStar-managed entries inside it."""
     target_dir.mkdir(parents=True, exist_ok=True)
     for name in MANAGED_ENTRIES:
-        managed = target_dir / name
+        managed = target_dir.joinpath(*name.split("/"))
         if managed.is_dir() and not managed.is_symlink():
             shutil.rmtree(managed)
         elif managed.exists() or managed.is_symlink():

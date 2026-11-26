@@ -95,8 +95,8 @@ foreach ($RequiredPath in @(
 Write-Host "==> Staging TokenStar plugin into $ResolvedTargetDir" -ForegroundColor Cyan
 New-Item -ItemType Directory -Path $ResolvedTargetDir -Force | Out-Null
 
-# Clean only TokenStar-managed bundle entries inside TargetDir before copying
-foreach ($ManagedEntry in @('plugin.json', 'mcp_config.json', 'assets', 'dist', 'server')) {
+# Clean only TokenStar-managed bundle entries inside TargetDir before copying (preserve server\.venv)
+foreach ($ManagedEntry in @('plugin.json', 'mcp_config.json', 'assets', 'dist', 'server\pyproject.toml', 'server\uv.lock', 'server\src')) {
     $ManagedPath = Join-Path $ResolvedTargetDir $ManagedEntry
     if (Test-Path -LiteralPath $ManagedPath) {
         Remove-Item -LiteralPath $ManagedPath -Recurse -Force
