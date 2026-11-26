@@ -1,7 +1,7 @@
 {
   "name": "tokenstar",
   "displayName": "TokenStar",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Interactive starry-sky observatory and token usage analytics for local Antigravity conversation logs.",
   "homepage": "https://github.com/ivvan3016/gemini-tokenstar-plugin",
   "repository": "https://github.com/ivvan3016/gemini-tokenstar-plugin",

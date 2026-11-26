@@ -3,20 +3,27 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 
-from tokenstar.config import APP_HTML_ENV_VAR
+from tokenstar.config import APP_HTML_ENV_VAR, resolve_export_dir
 from tokenstar.scanner import TokenStarScanner
 
 FastMCP = MCPServer
 
 APP_URI = "ui://tokenstar/app.html"
 APP_RESOURCE_MIME = "text/html;profile=mcp-app"
+MAX_EXPORT_PNG_BYTES = 20 * 1024 * 1024
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_DATA_URL_PREFIX_RE = re.compile(r"^data:image/png;base64,\s*", re.IGNORECASE)
+_UNSAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 _PLACEHOLDER_HTML = """<!doctype html>
 <html lang="zh-CN">
@@ -84,9 +91,68 @@ def load_app_html(html_path: Path | None = None) -> str:
     return _PLACEHOLDER_HTML
 
 
+def _sanitize_png_filename(filename: str) -> str:
+    """Normalize an export filename into a safe single-segment .png filename."""
+    leaf = Path(filename.strip().replace("\\", "/")).name
+    cleaned = _UNSAFE_FILENAME_RE.sub("-", leaf).lstrip(".-")
+    if not cleaned:
+        return "tokenstar-export.png"
+    if not cleaned.lower().endswith(".png"):
+        stem = Path(cleaned).stem.lstrip(".-") or "tokenstar-export"
+        return f"{stem}.png"
+    return cleaned
+
+
+def save_png_export(
+    png_base64: str,
+    filename: str = "tokenstar-wallpaper-2x.png",
+    export_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Validate and persist a base64 PNG image into the user export directory."""
+    if not isinstance(png_base64, str) or not png_base64.strip():
+        raise ValueError("PNG payload cannot be empty.")
+
+    stripped = _DATA_URL_PREFIX_RE.sub("", png_base64.strip(), count=1)
+    compact = "".join(stripped.split())
+    if not compact:
+        raise ValueError("PNG base64 payload cannot be empty.")
+
+    try:
+        raw = base64.b64decode(compact, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Invalid base64 PNG payload.") from exc
+
+    if not raw or len(raw) > MAX_EXPORT_PNG_BYTES:
+        raise ValueError(
+            f"PNG size must be between 1 byte and {MAX_EXPORT_PNG_BYTES} bytes."
+        )
+    if not raw.startswith(_PNG_SIGNATURE):
+        raise ValueError("Payload is not a valid PNG image.")
+
+    target_dir = resolve_export_dir(export_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_name = _sanitize_png_filename(filename)
+    stem = Path(safe_name).stem or "tokenstar-export"
+    dest = target_dir / safe_name
+    counter = 2
+    while dest.exists():
+        dest = target_dir / f"{stem}-{counter}.png"
+        counter += 1
+
+    dest.write_bytes(raw)
+    return {
+        "status": "saved",
+        "path": str(dest),
+        "filename": dest.name,
+        "bytes": len(raw),
+    }
+
+
 def create_mcp_server(
     scanner: TokenStarScanner,
     html_path: Path | None = None,
+    export_dir: Path | None = None,
 ) -> MCPServer:
     """Create and configure the TokenStar MCP App server."""
     server = MCPServer("tokenstar")
@@ -145,6 +211,18 @@ def create_mcp_server(
         """App-only tool forcing re-parse and returning fresh SkyDataResponse."""
         with scan_lock:
             return scanner.scan(force=True).model_dump(mode="json")
+
+    @server.tool(
+        name="tokenstar_save_export",
+        description="Save an exported 2x PNG sky image locally and return its saved file path.",
+        meta={"ui": {"visibility": ["app"]}},
+    )
+    def tokenstar_save_export(
+        png_base64: str,
+        filename: str = "tokenstar-wallpaper-2x.png",
+    ) -> dict[str, Any]:
+        """App-only tool persisting an exported PNG screenshot into the export directory."""
+        return save_png_export(png_base64, filename=filename, export_dir=export_dir)
 
     return server
 

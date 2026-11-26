@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from tokenstar.config import APP_HTML_ENV_VAR
-from tokenstar.mcp_server import APP_URI, create_mcp_server
+import tokenstar.config as ts_config
+from tokenstar.config import APP_HTML_ENV_VAR, EXPORT_DIR_ENV_VAR
+from tokenstar.mcp_server import APP_URI, create_mcp_server, save_png_export
 from tokenstar.scanner import TokenStarScanner
 
 
@@ -46,6 +49,7 @@ async def test_open_tokenstar_payload_and_entrypoints(tmp_brain, tmp_path, monke
         "open_tokenstar",
         "tokenstar_get_sky_data",
         "tokenstar_refresh",
+        "tokenstar_save_export",
     }
     assert by_name["open_tokenstar"].meta["ui"]["resourceUri"] == APP_URI
     assert [
@@ -56,6 +60,7 @@ async def test_open_tokenstar_payload_and_entrypoints(tmp_brain, tmp_path, monke
     ] == ["global", "aux_pane"]
     assert by_name["tokenstar_get_sky_data"].meta["ui"]["visibility"] == ["app"]
     assert by_name["tokenstar_refresh"].meta["ui"]["visibility"] == ["app"]
+    assert by_name["tokenstar_save_export"].meta["ui"]["visibility"] == ["app"]
 
     resources = await server.list_resources()
     ui_res = next(r for r in resources if str(r.uri) == APP_URI)
@@ -127,3 +132,81 @@ async def test_env_html_override_placeholder_and_refresh(tmp_brain, tmp_path, mo
     )
     refreshed_sky = _extract_tool_payload(await server.call_tool("tokenstar_refresh", {}))
     assert len(refreshed_sky["conversations"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_save_export_png_and_validation(tmp_brain, tmp_path):
+    export_dir = tmp_path / "downloads"
+    server = create_mcp_server(TokenStarScanner(tmp_brain.root), export_dir=export_dir)
+
+    raw_png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRdemo-png-payload"
+    b64_png = base64.b64encode(raw_png).decode("ascii")
+    data_url = f"data:image/png;base64,{b64_png}"
+
+    first = _extract_tool_payload(
+        await server.call_tool(
+            "tokenstar_save_export",
+            {"png_base64": data_url, "filename": "tokenstar-wallpaper-2x.png"},
+        )
+    )
+    assert first["status"] == "saved"
+    assert first["filename"] == "tokenstar-wallpaper-2x.png"
+    assert first["bytes"] == len(raw_png)
+    assert (export_dir / "tokenstar-wallpaper-2x.png").read_bytes() == raw_png
+
+    # Colliding filenames auto-number instead of overwriting
+    second = _extract_tool_payload(
+        await server.call_tool(
+            "tokenstar_save_export",
+            {"png_base64": b64_png, "filename": "tokenstar-wallpaper-2x.png"},
+        )
+    )
+    assert second["filename"] == "tokenstar-wallpaper-2x-2.png"
+    assert (export_dir / "tokenstar-wallpaper-2x-2.png").read_bytes() == raw_png
+
+    # Path traversal segments are stripped and forced into a .png inside export_dir
+    escaped = _extract_tool_payload(
+        await server.call_tool(
+            "tokenstar_save_export",
+            {"png_base64": b64_png, "filename": "../../evil.exe"},
+        )
+    )
+    assert escaped["filename"] == "evil.png"
+    assert (export_dir / "evil.png").is_file()
+    assert not (tmp_path / "evil.exe").exists()
+    assert not (tmp_path / "evil.png").exists()
+
+    # Reject invalid base64 and non-PNG payloads
+    with pytest.raises(ValueError):
+        save_png_export("not-valid-base64!!!", export_dir=export_dir)
+    non_png_b64 = base64.b64encode(b"JPEG-not-a-png").decode("ascii")
+    with pytest.raises(ValueError):
+        save_png_export(non_png_b64, export_dir=export_dir)
+
+
+def test_resolve_export_dir_uses_env_and_system_downloads(tmp_path, monkeypatch):
+    system_dl = tmp_path / "SystemDownloads"
+    env_dl = tmp_path / "EnvDownloads"
+    explicit_dl = tmp_path / "ExplicitDownloads"
+
+    monkeypatch.delenv(EXPORT_DIR_ENV_VAR, raising=False)
+    monkeypatch.setattr(ts_config, "detect_system_downloads_dir", lambda: system_dl)
+    assert ts_config.resolve_export_dir() == system_dl
+
+    monkeypatch.setenv(EXPORT_DIR_ENV_VAR, str(env_dl))
+    assert ts_config.resolve_export_dir() == env_dl
+    assert ts_config.resolve_export_dir(explicit_dl) == explicit_dl
+
+    parsed = ts_config._parse_xdg_download_dir(
+        '# XDG_DOWNLOAD_DIR="$HOME/Ignored"\nXDG_DOWNLOAD_DIR="$HOME/CustomDownloads"\n',
+        Path("/home/demo"),
+    )
+    assert parsed == Path("/home/demo/CustomDownloads")
+
+    monkeypatch.delenv(EXPORT_DIR_ENV_VAR, raising=False)
+    raw_png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRrelocated"
+    b64_png = base64.b64encode(raw_png).decode("ascii")
+    saved = save_png_export(b64_png, filename="tokenstar-wallpaper-2x.png")
+    assert saved["status"] == "saved"
+    assert Path(saved["path"]) == system_dl / "tokenstar-wallpaper-2x.png"
+    assert (system_dl / "tokenstar-wallpaper-2x.png").read_bytes() == raw_png

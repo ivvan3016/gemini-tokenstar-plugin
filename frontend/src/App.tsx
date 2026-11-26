@@ -11,7 +11,7 @@ export interface AppProps {
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
-const TOAST_DURATION_MS = 4_500;
+const TOAST_DURATION_MS = 6_000;
 
 function computeSkySignature(data: SkyDataResponse): string {
   const convSig = data.conversations
@@ -37,6 +37,7 @@ export function App({
   const [activeTab, setActiveTab] = useState<ActiveTab>('sky');
   const [tokenMode, setTokenMode] = useState<TokenMode>('total');
   const [privacyMode, setPrivacyMode] = useState(false);
+  const [transportMode, setTransportMode] = useState<'mcp' | 'http'>('http');
 
   const [focusStarId, setFocusStarId] = useState<string | null>(null);
   const [focusStatsStarId, setFocusStatsStarId] = useState<string | null>(null);
@@ -90,6 +91,7 @@ export function App({
           return;
         }
         transportRef.current = transport;
+        setTransportMode(transport.mode);
 
         const initial = await transport.getSkyData();
         if (disposed) return;
@@ -167,6 +169,7 @@ export function App({
       if (!transport) {
         transport = await factoryRef.current();
         transportRef.current = transport;
+        setTransportMode(transport.mode);
       }
       const next = await transport.refresh();
       applySkyResponse(next);
@@ -213,6 +216,12 @@ export function App({
 
   const handleClearFocusStatsStar = useCallback(() => {
     setFocusStatsStarId(null);
+  }, []);
+
+  const handleSaveExportPng = useCallback(async (pngBase64: string, filename: string) => {
+    const transport = transportRef.current;
+    if (!transport?.saveExportPng) return null;
+    return transport.saveExportPng(pngBase64, filename);
   }, []);
 
   const stars = data?.conversations ?? [];
@@ -284,6 +293,8 @@ export function App({
             onClearFocus={handleClearFocus}
             onClearHighlightDate={handleClearHighlightDate}
             onJumpToStats={handleJumpToStats}
+            onSaveExportPng={transportMode === 'mcp' ? handleSaveExportPng : undefined}
+            onNotify={showToast}
           />
         ) : (
           <StatsTab

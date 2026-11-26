@@ -45,6 +45,12 @@ export interface SkyExportOptions {
   showGrid?: boolean;
   showConstellations?: boolean;
   showNebulae?: boolean;
+  skipDownload?: boolean;
+}
+
+export interface SkyExportResult {
+  dataUrl: string;
+  filename: string;
 }
 
 export interface StarCanvasProps {
@@ -866,7 +872,10 @@ function triggerPngDownload(canvas: HTMLCanvasElement, filename: string): void {
  * Export the starry sky at 2x resolution as either a clean wallpaper (`wallpaper`)
  * or a discreet commemorative card (`card`) that never leaks conversation titles.
  */
-export function exportSkyPng(nodes: StarNode[], options: SkyExportOptions): void {
+export function exportSkyPng(
+  nodes: StarNode[],
+  options: SkyExportOptions,
+): SkyExportResult | null {
   const logicalW = options.width > 0 ? options.width : 1280;
   const logicalH = options.height > 0 ? options.height : 720;
 
@@ -874,7 +883,7 @@ export function exportSkyPng(nodes: StarNode[], options: SkyExportOptions): void
   canvas.width = Math.round(logicalW * 2);
   canvas.height = Math.round(logicalH * 2);
   const ctx = canvas.getContext('2d');
-  if (!ctx) return;
+  if (!ctx) return null;
 
   ctx.setTransform(2, 0, 0, 2, 0, 0);
 
@@ -937,7 +946,11 @@ export function exportSkyPng(nodes: StarNode[], options: SkyExportOptions): void
 
   const filename =
     options.mode === 'wallpaper' ? 'tokenstar-wallpaper-2x.png' : 'tokenstar-card-2x.png';
-  triggerPngDownload(canvas, filename);
+  const dataUrl = typeof canvas.toDataURL === 'function' ? canvas.toDataURL('image/png') : '';
+  if (!options.skipDownload) {
+    triggerPngDownload(canvas, filename);
+  }
+  return { dataUrl, filename };
 }
 
 const CANVAS_CONTAINER_STYLE: CSSProperties = {

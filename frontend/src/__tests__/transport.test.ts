@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SkyDataResponse } from '../types/sky';
-import { createTransport, extractSkyData } from '../services/transport';
+import {
+  createTransport,
+  extractExportSaveResult,
+  extractSkyData,
+} from '../services/transport';
 
 const samplePayload: SkyDataResponse = {
   schema_version: '1.0',
@@ -67,5 +71,28 @@ describe('transport', () => {
       ],
     });
     expect(parsed).toEqual(samplePayload);
+  });
+
+  it('extracts ExportSaveResult from structuredContent or text fallback and throws on isError', () => {
+    const saved = {
+      status: 'saved' as const,
+      path: 'C:/Users/demo/Downloads/tokenstar-wallpaper-2x.png',
+      filename: 'tokenstar-wallpaper-2x.png',
+      bytes: 1280,
+    };
+
+    expect(extractExportSaveResult({ structuredContent: saved })).toEqual(saved);
+    expect(
+      extractExportSaveResult({
+        content: [{ type: 'text', text: JSON.stringify(saved) }],
+      }),
+    ).toEqual(saved);
+
+    expect(() =>
+      extractExportSaveResult({
+        isError: true,
+        content: [{ type: 'text', text: 'Permission denied' }],
+      }),
+    ).toThrow('Permission denied');
   });
 });

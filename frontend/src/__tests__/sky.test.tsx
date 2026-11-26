@@ -761,6 +761,84 @@ describe('SkyTab, DetailDrawer & PlaybackBar components', () => {
     expect(clickSpy).toHaveBeenCalled();
   });
 
+  it('uses MCP export callback in host mode and opens preview modal fallback on error', async () => {
+    const stars = [makeStar({ id: 'mcp-export-star', local_date: '2026-06-15' })];
+    const onSaveExportPng = vi.fn().mockResolvedValue({
+      status: 'saved',
+      path: 'C:/Users/demo/Downloads/tokenstar-wallpaper-2x.png',
+      filename: 'tokenstar-wallpaper-2x.png',
+      bytes: 2048,
+    });
+    const onNotify = vi.fn();
+
+    act(() => {
+      root.render(
+        <SkyTab
+          stars={stars}
+          tokenMode="total"
+          privacyMode={false}
+          highlightDate={null}
+          focusStarId={null}
+          onClearFocus={vi.fn()}
+          onClearHighlightDate={vi.fn()}
+          onJumpToStats={vi.fn()}
+          onSaveExportPng={onSaveExportPng}
+          onNotify={onNotify}
+        />,
+      );
+    });
+
+    const exportBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('导出星图'),
+    );
+    expect(exportBtn).toBeDefined();
+    act(() => {
+      exportBtn!.click();
+    });
+
+    const wallpaperItem = Array.from(container.querySelectorAll('button[role="menuitem"]')).find((b) =>
+      b.textContent?.includes('纯净壁纸（2x）'),
+    ) as HTMLButtonElement | undefined;
+    expect(wallpaperItem).toBeDefined();
+
+    await act(async () => {
+      wallpaperItem!.click();
+      await Promise.resolve();
+    });
+
+    expect(onSaveExportPng).toHaveBeenCalledWith(
+      expect.stringMatching(/^data:image\/png;base64,/),
+      'tokenstar-wallpaper-2x.png',
+    );
+    expect(onNotify).toHaveBeenCalledWith(
+      '✦ 星图已保存至 C:/Users/demo/Downloads/tokenstar-wallpaper-2x.png',
+    );
+    expect(container.querySelector('div[role="dialog"][aria-label="星图导出预览"]')).toBeNull();
+
+    // Rejection falls back to preview modal so the user can save or copy manually
+    onSaveExportPng.mockRejectedValueOnce(new Error('Disk full'));
+    act(() => {
+      exportBtn!.click();
+    });
+    const cardItem = Array.from(container.querySelectorAll('button[role="menuitem"]')).find((b) =>
+      b.textContent?.includes('星图纪念卡（2x）'),
+    ) as HTMLButtonElement | undefined;
+    expect(cardItem).toBeDefined();
+
+    await act(async () => {
+      cardItem!.click();
+      await Promise.resolve();
+    });
+
+    const previewDialog = container.querySelector('div[role="dialog"][aria-label="星图导出预览"]');
+    expect(previewDialog).not.toBeNull();
+    const img = previewDialog!.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute('alt')).toBe('tokenstar-card-2x.png');
+    expect(img!.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
+    expect(onNotify).toHaveBeenCalledWith('导出保存受阻：Disk full');
+  });
+
   it('releases pointer capture and resets drag state on pointercancel without calling onSelectStar', () => {
     const nodes = computeStarPositions([makeStar({ id: 'cancel-star-1' })], 'total');
     const onSelectStar = vi.fn();

@@ -7,11 +7,25 @@ import {
 } from '@modelcontextprotocol/ext-apps';
 import type { SkyDataResponse } from '../types/sky';
 
+export interface ExportSaveResult {
+  status: 'saved';
+  path: string;
+  filename: string;
+  bytes: number;
+}
+
 export interface DataTransport {
   mode: 'mcp' | 'http';
   getSkyData(): Promise<SkyDataResponse>;
   refresh(): Promise<SkyDataResponse>;
+  saveExportPng?(pngBase64: string, filename: string): Promise<ExportSaveResult>;
   dispose(): void;
+}
+
+interface McpToolResultLike {
+  isError?: boolean;
+  structuredContent?: Record<string, unknown>;
+  content?: Array<{ type: string; text?: string }>;
 }
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 2500;
@@ -35,11 +49,11 @@ function applyHostContext(ctx: McpUiHostContext | undefined): void {
   }
 }
 
-export function extractSkyData(result: {
-  isError?: boolean;
-  structuredContent?: Record<string, unknown>;
-  content?: Array<{ type: string; text?: string }>;
-}): SkyDataResponse {
+function unwrapMcpResult<T>(
+  result: McpToolResultLike,
+  isValid: (value: unknown) => value is T,
+  invalidMessage: string,
+): T {
   if (result.isError) {
     const errText = result.content
       ?.filter((c) => c.type === 'text' && typeof c.text === 'string')
@@ -48,20 +62,17 @@ export function extractSkyData(result: {
     throw new Error(errText || 'MCP tool returned an error');
   }
 
-  if (
-    result.structuredContent &&
-    Array.isArray(result.structuredContent.conversations)
-  ) {
-    return result.structuredContent as unknown as SkyDataResponse;
+  if (result.structuredContent && isValid(result.structuredContent)) {
+    return result.structuredContent;
   }
 
   if (Array.isArray(result.content)) {
     for (const block of result.content) {
       if (block.type === 'text' && typeof block.text === 'string') {
         try {
-          const parsed = JSON.parse(block.text) as Partial<SkyDataResponse>;
-          if (parsed && Array.isArray(parsed.conversations)) {
-            return parsed as SkyDataResponse;
+          const parsed = JSON.parse(block.text) as unknown;
+          if (isValid(parsed)) {
+            return parsed;
           }
         } catch {
           continue;
@@ -70,7 +81,43 @@ export function extractSkyData(result: {
     }
   }
 
-  throw new Error('Invalid SkyDataResponse payload returned from MCP tool');
+  throw new Error(invalidMessage);
+}
+
+function isSkyDataResponse(value: unknown): value is SkyDataResponse {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as Partial<SkyDataResponse>).conversations)
+  );
+}
+
+function isExportSaveResult(value: unknown): value is ExportSaveResult {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<ExportSaveResult>;
+  return (
+    candidate.status === 'saved' &&
+    typeof candidate.path === 'string' &&
+    candidate.path.length > 0 &&
+    typeof candidate.filename === 'string' &&
+    typeof candidate.bytes === 'number'
+  );
+}
+
+export function extractSkyData(result: McpToolResultLike): SkyDataResponse {
+  return unwrapMcpResult(
+    result,
+    isSkyDataResponse,
+    'Invalid SkyDataResponse payload returned from MCP tool',
+  );
+}
+
+export function extractExportSaveResult(result: McpToolResultLike): ExportSaveResult {
+  return unwrapMcpResult(
+    result,
+    isExportSaveResult,
+    'Invalid ExportSaveResult payload returned from MCP tool',
+  );
 }
 
 function createHttpTransport(): DataTransport {
@@ -104,26 +151,21 @@ function createMcpTransport(app: App): DataTransport {
         name: 'tokenstar_get_sky_data',
         arguments: {},
       });
-      return extractSkyData(
-        result as {
-          isError?: boolean;
-          structuredContent?: Record<string, unknown>;
-          content?: Array<{ type: string; text?: string }>;
-        },
-      );
+      return extractSkyData(result as McpToolResultLike);
     },
     async refresh(): Promise<SkyDataResponse> {
       const result = await app.callServerTool({
         name: 'tokenstar_refresh',
         arguments: {},
       });
-      return extractSkyData(
-        result as {
-          isError?: boolean;
-          structuredContent?: Record<string, unknown>;
-          content?: Array<{ type: string; text?: string }>;
-        },
-      );
+      return extractSkyData(result as McpToolResultLike);
+    },
+    async saveExportPng(pngBase64: string, filename: string): Promise<ExportSaveResult> {
+      const result = await app.callServerTool({
+        name: 'tokenstar_save_export',
+        arguments: { png_base64: pngBase64, filename },
+      });
+      return extractExportSaveResult(result as McpToolResultLike);
     },
     dispose(): void {
       void app.close().catch(() => undefined);
@@ -142,7 +184,7 @@ export async function createTransport(
     return createHttpTransport();
   }
 
-  const app = new App({ name: 'TokenStar', version: '0.1.0' }, {}, { autoResize: true });
+  const app = new App({ name: 'TokenStar', version: '0.1.1' }, {}, { autoResize: true });
   app.onhostcontextchanged = (ctx) => {
     applyHostContext(ctx);
   };

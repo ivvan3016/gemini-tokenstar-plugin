@@ -18,6 +18,7 @@ import {
   formatTokenCount,
 } from './DetailDrawer';
 import { PlaybackBar, type PlaybackSpeed } from './PlaybackBar';
+import type { ExportSaveResult } from '../../services/transport';
 
 export interface SkyTabProps {
   stars: ConversationStar[];
@@ -28,6 +29,8 @@ export interface SkyTabProps {
   onClearFocus?: () => void;
   onClearHighlightDate?: () => void;
   onJumpToStats: (starId: string) => void;
+  onSaveExportPng?: (pngBase64: string, filename: string) => Promise<ExportSaveResult | null>;
+  onNotify?: (message: string) => void;
 }
 
 const ROOT_STYLE: CSSProperties = {
@@ -82,12 +85,20 @@ export function SkyTab({
   onClearFocus,
   onClearHighlightDate,
   onJumpToStats,
+  onSaveExportPng,
+  onNotify,
 }: SkyTabProps) {
   const nodes = useMemo(() => computeStarPositions(stars, tokenMode), [stars, tokenMode]);
 
   const [filterOpen, setFilterOpen] = useState(true);
   const [legendOpen, setLegendOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [exportPreview, setExportPreview] = useState<{
+    dataUrl: string;
+    filename: string;
+    error?: string;
+  } | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
   const [showConstellations, setShowConstellations] = useState(true);
   const [showNebulae, setShowNebulae] = useState(true);
@@ -267,7 +278,8 @@ export function SkyTab({
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (exportOpen) setExportOpen(false);
+        if (exportPreview) setExportPreview(null);
+        else if (exportOpen) setExportOpen(false);
         else if (legendOpen) setLegendOpen(false);
         else if (selectedStarId) setSelectedStarId(null);
       }
@@ -283,7 +295,7 @@ export function SkyTab({
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('mousedown', onDocClick);
     };
-  }, [exportOpen, legendOpen, selectedStarId]);
+  }, [exportPreview, exportOpen, legendOpen, selectedStarId]);
 
   const handleViewportSizeChange = useCallback((size: { width: number; height: number }) => {
     viewportRef.current = size;
@@ -384,7 +396,7 @@ export function SkyTab({
     setPlaybackCount(nodes.length);
   };
 
-  const handleExportPng = (mode: 'wallpaper' | 'card') => {
+  const handleExportPng = async (mode: 'wallpaper' | 'card') => {
     const { width, height } = viewportRef.current;
     const w = width > 0 ? width : DEFAULT_FALLBACK_VIEWPORT.width;
     const h = height > 0 ? height : DEFAULT_FALLBACK_VIEWPORT.height;
@@ -399,7 +411,7 @@ export function SkyTab({
           : `${firstDate} ~ ${lastDate}`
         : '—';
 
-    exportSkyPng(nodes, {
+    const exportOptions = {
       mode,
       width: w,
       height: h,
@@ -412,8 +424,48 @@ export function SkyTab({
       showGrid: mode === 'wallpaper' ? false : showGrid,
       showConstellations,
       showNebulae,
-    });
+    };
+
     setExportOpen(false);
+
+    if (!onSaveExportPng) {
+      const result = exportSkyPng(nodes, exportOptions);
+      if (result) {
+        onNotify?.(`✦ 已开始下载 ${result.filename}`);
+      }
+      return;
+    }
+
+    if (isExporting) return;
+    const rendered = exportSkyPng(nodes, { ...exportOptions, skipDownload: true });
+    if (!rendered || !rendered.dataUrl) {
+      onNotify?.('导出失败：无法生成星图 PNG 图像');
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      const saved = await onSaveExportPng(rendered.dataUrl, rendered.filename);
+      if (saved && saved.path) {
+        onNotify?.(`✦ 星图已保存至 ${saved.path}`);
+        return;
+      }
+      setExportPreview({
+        dataUrl: rendered.dataUrl,
+        filename: rendered.filename,
+      });
+      onNotify?.('未能直接写入本地磁盘，已在预览窗口打开（可右键另存为）');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '保存失败';
+      setExportPreview({
+        dataUrl: rendered.dataUrl,
+        filename: rendered.filename,
+        error: msg,
+      });
+      onNotify?.(`导出保存受阻：${msg}`);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const playbackCurrentDate = useMemo(() => {
@@ -641,11 +693,16 @@ export function SkyTab({
             <div ref={exportMenuRef} style={{ position: 'relative' }}>
               <button
                 type="button"
+                disabled={isExporting}
                 onClick={() => setExportOpen((v) => !v)}
                 aria-expanded={exportOpen}
-                style={HUD_BTN_STYLE}
+                style={{
+                  ...HUD_BTN_STYLE,
+                  opacity: isExporting ? 0.65 : 1,
+                  cursor: isExporting ? 'wait' : 'pointer',
+                }}
               >
-                导出星图 ▾
+                {isExporting ? '导出中...' : '导出星图 ▾'}
               </button>
               {exportOpen && (
                 <div
@@ -667,7 +724,8 @@ export function SkyTab({
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => handleExportPng('wallpaper')}
+                    disabled={isExporting}
+                    onClick={() => void handleExportPng('wallpaper')}
                     style={{
                       ...HUD_BTN_STYLE,
                       width: '100%',
@@ -682,7 +740,8 @@ export function SkyTab({
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => handleExportPng('card')}
+                    disabled={isExporting}
+                    onClick={() => void handleExportPng('card')}
                     style={{
                       ...HUD_BTN_STYLE,
                       width: '100%',
@@ -1107,6 +1166,71 @@ export function SkyTab({
           />
         </div>
       </div>
+
+      {exportPreview && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="星图导出预览"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 60,
+            background: 'rgba(2, 5, 14, 0.78)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+          onClick={() => setExportPreview(null)}
+        >
+          <div
+            style={{
+              ...GLASS_PANEL_STYLE,
+              maxWidth: 'min(820px, 100%)',
+              maxHeight: '100%',
+              padding: '14px 16px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: '#edf4ff' }}>
+                {exportPreview.filename}
+              </span>
+              <button
+                type="button"
+                onClick={() => setExportPreview(null)}
+                aria-label="关闭导出预览"
+                style={HUD_BTN_STYLE}
+              >
+                关闭
+              </button>
+            </div>
+            <div style={{ fontSize: '12px', color: exportPreview.error ? '#ffbfa8' : 'rgba(196, 214, 246, 0.84)' }}>
+              {exportPreview.error
+                ? `直接保存失败（${exportPreview.error}）。右键图片可另存为或复制：`
+                : '右键图片可另存为或复制：'}
+            </div>
+            <img
+              src={exportPreview.dataUrl}
+              alt={exportPreview.filename}
+              style={{
+                maxWidth: '100%',
+                maxHeight: 'calc(100vh - 200px)',
+                borderRadius: '8px',
+                border: '1px solid rgba(164, 194, 248, 0.2)',
+                objectFit: 'contain',
+                background: '#010205',
+              }}
+            />
+          </div>
+        </div>
+      )}
     </section>
   );
 }
