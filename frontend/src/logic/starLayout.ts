@@ -319,42 +319,61 @@ function layoutConversationRequests(
       };
     }
   } else if (morphology === 1) {
-    // Morphology 1: Irregular multi-pocket OB association with wide dark gaps between pockets
+    // Morphology 1: Open multi-pocket OB association sweeping across dark star-forming pockets
     const pocketCount = clamp(Math.round(2 + rand() * 1.5 + mainCount / 22), 2, 5);
     const associationSpan = 165 + Math.sqrt(mainCount) * 86;
+    const sweepSpan = (0.95 + rand() * 0.65) * Math.PI;
+    const sweepDir = rand() < 0.5 ? 1 : -1;
+    const startAng = rand() * Math.PI * 2;
     const pockets: LocalOffset[] = [];
     for (let p = 0; p < pocketCount; p += 1) {
-      const angle = (p / pocketCount) * Math.PI * 2 + (rand() - 0.5) * 0.9;
-      const dist = associationSpan * (0.42 + rand() * 0.58);
+      const pFrac = pocketCount > 1 ? p / (pocketCount - 1) - 0.5 : 0;
+      const angle = startAng + sweepDir * pFrac * sweepSpan + (rand() - 0.5) * 0.55;
+      const dist = associationSpan * (0.4 + rand() * 0.58) * (0.86 + (pFrac + 0.5) * 0.28);
       pockets.push({
         dx: Math.cos(angle) * dist,
-        dy: Math.sin(angle) * dist * (0.68 + rand() * 0.4),
+        dy: Math.sin(angle) * dist * (0.68 + rand() * 0.36),
       });
     }
 
     for (let k = 0; k < mainCount; k += 1) {
       const idx = mainIndices[k];
-      const isOutlier = rand() < 0.18;
-      const pocket = pockets[(k + Math.floor(rand() * 2)) % pockets.length];
+      const frac = mainCount > 1 ? k / (mainCount - 1) : 0;
+      const isOutlier = rand() < 0.12;
+      const pIdx = clamp(Math.round(frac * (pocketCount - 1) + (rand() - 0.5) * 0.65), 0, pocketCount - 1);
+      const pocket = pockets[pIdx];
+      const prevPocket = pockets[Math.max(0, pIdx - 1)];
+      const nextPocket = pockets[Math.min(pocketCount - 1, pIdx + 1)];
+      const dirX = nextPocket.dx - prevPocket.dx;
+      const dirY = nextPocket.dy - prevPocket.dy;
+      const dirLen = Math.hypot(dirX, dirY);
+      const localDrift = pocketCount > 1 ? (frac * (pocketCount - 1) - pIdx) * 52 : 0;
+      const driftX = dirLen > 1e-4 ? (dirX / dirLen) * localDrift : 0;
+      const driftY = dirLen > 1e-4 ? (dirY / dirLen) * localDrift : 0;
+
       const scatterR = isOutlier ? 105 + rand() * 95 : 28 + Math.pow(rand(), 1.35) * 76;
       const ang = rand() * Math.PI * 2;
-      const lx = pocket.dx + Math.cos(ang) * scatterR;
-      const ly = pocket.dy + Math.sin(ang) * scatterR * (0.7 + rand() * 0.35);
+      const lx = pocket.dx + driftX + Math.cos(ang) * scatterR;
+      const ly = pocket.dy + driftY + Math.sin(ang) * scatterR * (0.7 + rand() * 0.35);
       offsets[idx] = {
         dx: lx * cosR - ly * sinR,
         dy: lx * sinR + ly * cosR,
       };
     }
   } else {
-    // Morphology 2: Open core-halo cluster (airier separation across core and wide halo)
+    // Morphology 2: Open core-halo cluster with gentle sectoral/spiral progression
     const clusterRadius = 150 + Math.sqrt(mainCount) * 88;
     const flattenY = 0.65 + rand() * 0.32;
+    const spinDir = rand() < 0.5 ? 1 : -1;
+    const startAng = rand() * Math.PI * 2;
+    const totalSweep = (1.05 + rand() * 0.75) * Math.PI;
     for (let k = 0; k < mainCount; k += 1) {
       const idx = mainIndices[k];
+      const frac = mainCount > 1 ? k / (mainCount - 1) : 0;
       const mag = magnitudes[idx] ?? 0.35;
       const radialBias = clamp(1.12 - mag * 0.45, 0.45, 1.15);
-      const r = Math.pow(rand(), 1.55) * clusterRadius * radialBias + 32;
-      const ang = rand() * Math.PI * 2;
+      const r = (Math.pow(rand(), 1.55) * clusterRadius * radialBias + 32) * (0.82 + 0.3 * frac);
+      const ang = startAng + spinDir * frac * totalSweep + (rand() - 0.5) * 1.15;
       const lx = Math.cos(ang) * r;
       const ly = Math.sin(ang) * r * flattenY;
       offsets[idx] = {
@@ -366,12 +385,15 @@ function layoutConversationRequests(
 
   // Place subagent sessions in open satellite sub-pockets off their preceding main-thread vertex
   if (subIndices.length > 0) {
-    const subPocketCenters = new Map<string, LocalOffset>();
+    const subPocketState = new Map<
+      string,
+      { center: LocalOffset; outwardAng: number; stepCount: number }
+    >();
     for (const idx of subIndices) {
       const req = orderedReqs[idx];
       const sessKey = req.session_id || req.id;
-      let center = subPocketCenters.get(sessKey);
-      if (!center) {
+      let state = subPocketState.get(sessKey);
+      if (!state) {
         let anchorIdx = mainIndices[0];
         for (let m = 0; m < mainIndices.length; m += 1) {
           if (mainIndices[m] < idx) anchorIdx = mainIndices[m];
@@ -383,17 +405,23 @@ function layoutConversationRequests(
             ? Math.atan2(anchor.dy, anchor.dx) + (rand() - 0.5) * 1.1
             : rand() * Math.PI * 2;
         const satDist = 92 + rand() * 88;
-        center = {
-          dx: anchor.dx + Math.cos(outwardAng) * satDist,
-          dy: anchor.dy + Math.sin(outwardAng) * satDist,
+        state = {
+          center: {
+            dx: anchor.dx + Math.cos(outwardAng) * satDist,
+            dy: anchor.dy + Math.sin(outwardAng) * satDist,
+          },
+          outwardAng,
+          stepCount: 0,
         };
-        subPocketCenters.set(sessKey, center);
+        subPocketState.set(sessKey, state);
       }
+      const stepDrift = state.stepCount * (14 + rand() * 12);
+      state.stepCount += 1;
       const jitterR = 26 + Math.pow(rand(), 1.2) * 54;
       const jitterA = rand() * Math.PI * 2;
       offsets[idx] = {
-        dx: center.dx + Math.cos(jitterA) * jitterR,
-        dy: center.dy + Math.sin(jitterA) * jitterR,
+        dx: state.center.dx + Math.cos(state.outwardAng) * stepDrift + Math.cos(jitterA) * jitterR,
+        dy: state.center.dy + Math.sin(state.outwardAng) * stepDrift + Math.sin(jitterA) * jitterR,
       };
     }
   }

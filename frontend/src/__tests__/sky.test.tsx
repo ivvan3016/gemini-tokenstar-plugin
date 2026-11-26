@@ -16,7 +16,7 @@ import {
 } from '../components/sky/StarCanvas';
 import { DetailDrawer } from '../components/sky/DetailDrawer';
 import { PlaybackBar } from '../components/sky/PlaybackBar';
-import { SkyTab } from '../components/sky/SkyTab';
+import { SkyTab, computePlaybackBaseRate } from '../components/sky/SkyTab';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -210,6 +210,110 @@ describe('StarCanvas pure geometry & exportSkyPng', () => {
     // Playback limit reveals constellation edges progressively without altering MST structure
     expect(buildConstellationSegments(nodes, 1)).toHaveLength(0);
     expect(buildConstellationSegments(nodes, 5)).toHaveLength(4);
+  });
+
+  it('builds crossing-free, temporally coherent constellations with forward-time orientation across morphologies', () => {
+    const properlyCrosses = (
+      a1: { x: number; y: number; id: string },
+      a2: { x: number; y: number; id: string },
+      b1: { x: number; y: number; id: string },
+      b2: { x: number; y: number; id: string },
+    ) => {
+      if (a1.id === b1.id || a1.id === b2.id || a2.id === b1.id || a2.id === b2.id) {
+        return false;
+      }
+      const cross = (p: { x: number; y: number }, q: { x: number; y: number }, r: { x: number; y: number }) =>
+        (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+      const d1 = cross(a1, a2, b1);
+      const d2 = cross(a1, a2, b2);
+      const d3 = cross(b1, b2, a1);
+      const d4 = cross(b1, b2, a2);
+      return ((d1 > 1e-6 && d2 < -1e-6) || (d1 < -1e-6 && d2 > 1e-6)) &&
+        ((d3 > 1e-6 && d4 < -1e-6) || (d3 < -1e-6 && d4 > 1e-6));
+    };
+
+    const convIds = ['morph-alpha-1', 'morph-beta-2', 'morph-gamma-3', 'morph-delta-4', 'morph-epsilon-5', 'morph-zeta-6'];
+    const convs = convIds.map((id, cIdx) => {
+      const count = 20;
+      const reqs: RequestStar[] = Array.from({ length: count }, (_, i) =>
+        makeRequest({
+          id: `${id}:${i}`,
+          conversation_id: id,
+          session_id: id,
+          step_index: i,
+          turn_index: i + 1,
+          created_at: `2026-06-${String(10 + cIdx).padStart(2, '0')}T10:${String(i).padStart(2, '0')}:00Z`,
+          local_date: `2026-06-${String(10 + cIdx).padStart(2, '0')}`,
+          total_tokens: 4_000 + ((i * 3) % 7) * 12_000,
+        }),
+      );
+      return makeStar({
+        id,
+        started_at: `2026-06-${String(10 + cIdx).padStart(2, '0')}T10:00:00Z`,
+        ended_at: `2026-06-${String(10 + cIdx).padStart(2, '0')}T10:19:00Z`,
+        local_date: `2026-06-${String(10 + cIdx).padStart(2, '0')}`,
+        model_steps_count: count,
+        requests: reqs,
+      });
+    });
+
+    const nodes = computeStarPositions(convs, 'total');
+    const allSegments = buildConstellationSegments(nodes);
+    let anyBranchJumpOrFork = false;
+
+    for (const id of convIds) {
+      const segs = allSegments.filter((s) => s.conversationId === id);
+      expect(segs).toHaveLength(19);
+
+      // Every segment flows forward chronologically
+      expect(segs.every((s) => s.fromIndex < s.toIndex)).toBe(true);
+
+      // Verify connectivity (V - 1 edges spanning all 20 nodes)
+      const adj = new Map<string, string[]>();
+      for (const s of segs) {
+        adj.set(s.from.id, [...(adj.get(s.from.id) ?? []), s.to.id]);
+        adj.set(s.to.id, [...(adj.get(s.to.id) ?? []), s.from.id]);
+        if (Math.abs(s.to.requestIndexInConv - s.from.requestIndexInConv) > 1) {
+          anyBranchJumpOrFork = true;
+        }
+      }
+      for (const neighbors of adj.values()) {
+        if (neighbors.length >= 3) anyBranchJumpOrFork = true;
+      }
+      const seen = new Set<string>([`${id}:0`]);
+      const queue = [`${id}:0`];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        for (const nxt of adj.get(cur) ?? []) {
+          if (!seen.has(nxt)) {
+            seen.add(nxt);
+            queue.push(nxt);
+          }
+        }
+      }
+      expect(seen.size).toBe(20);
+
+      // Zero proper intersections among main-thread segments
+      for (let i = 0; i < segs.length; i += 1) {
+        for (let j = i + 1; j < segs.length; j += 1) {
+          expect(properlyCrosses(segs[i].from, segs[i].to, segs[j].from, segs[j].to)).toBe(false);
+        }
+      }
+
+      // Average chronological step delta remains strongly coherent without forcing a linear chain
+      const avgDelta =
+        segs.reduce((acc, s) => acc + Math.abs(s.to.requestIndexInConv - s.from.requestIndexInConv), 0) /
+        segs.length;
+      expect(avgDelta).toBeLessThan(4.0);
+    }
+
+    expect(anyBranchJumpOrFork).toBe(true);
+
+    // Playback speed helper scales gently and runs calmer than legacy 2.4 / (n/18)
+    expect(computePlaybackBaseRate(0)).toBe(0);
+    expect(computePlaybackBaseRate(-5)).toBe(0);
+    expect(computePlaybackBaseRate(20)).toBeCloseTo(1.3, 5);
+    expect(computePlaybackBaseRate(170)).toBeCloseTo(5.0, 5);
   });
 
   it('computes fit camera, coordinate roundtrips, and hit testing accurately', () => {

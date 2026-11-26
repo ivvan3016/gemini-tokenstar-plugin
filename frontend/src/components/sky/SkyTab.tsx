@@ -66,6 +66,12 @@ const HUD_BTN_STYLE: CSSProperties = {
 
 const DEFAULT_FALLBACK_VIEWPORT = { width: 1200, height: 720 };
 
+/** Compute a calm 1x timeline playback rate (stars/sec) scaled gently with star count. */
+export function computePlaybackBaseRate(totalNodes: number): number {
+  if (totalNodes <= 0) return 0;
+  return Math.max(1.3, totalNodes / 34);
+}
+
 /** Immersive Canvas 2D Starry Sky Tab with request-level constellations, filter HUD, legend, playback, and 2x PNG export. */
 export function SkyTab({
   stars,
@@ -225,7 +231,7 @@ export function SkyTab({
     if (!isPlaying || nodes.length === 0) return;
     let rafId = 0;
     let lastTs = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    const baseRate = Math.max(2.4, nodes.length / 18);
+    const baseRate = computePlaybackBaseRate(nodes.length);
 
     const step = (now: number) => {
       const dt = Math.min(0.08, Math.max(0.001, (now - lastTs) / 1000));
