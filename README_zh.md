@@ -69,40 +69,101 @@ flowchart LR
 
 ## 环境要求
 
-- **Python 3.12–3.13** 与 [`uv`](https://docs.astral.sh/uv/)
-- **Node.js (>= 20) 与 npm**（存在 `.tools/nodejs` 时构建脚本会自动优先使用）
-- **Antigravity**（如需作为 MCP App 插件运行；独立 Web 模式无需启动 Antigravity）
+- **安装预构建 Release 包（推荐）：** 仅需 [`uv`](https://docs.astral.sh/uv/)（会自动管理 Python 3.12–3.13 运行时，**无需安装 Node.js**）。
+- **从源码构建 / 本地开发：** [`uv`](https://docs.astral.sh/uv/) + **Node.js (>= 20) 与 npm**（存在 `.tools/nodejs` 时构建脚本会自动优先使用）+ **Git**。
+- **Antigravity：** 仅插件模式需要（`uv` 需位于 Antigravity 可见的系统 `PATH` 中）；独立 Web 模式无需启动 Antigravity。
 
 ## 快速开始
 
-### 1. 构建单文件前端产物与完整校验
+### 方式 A：通过预构建 Release 包快速安装（推荐，无需 Node.js）
+
+直接从 [GitHub Releases](https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/latest) 下载 `tokenstar-plugin.zip`，解压到 `~/.gemini/config/plugins/tokenstar` 并同步隔离环境即可：
+
+#### Windows (PowerShell)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build.ps1
+$dest = Join-Path $HOME '.gemini\config\plugins\tokenstar'
+$zip = Join-Path $env:TEMP 'tokenstar-plugin.zip'
+Invoke-WebRequest 'https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/latest/download/tokenstar-plugin.zip' -OutFile $zip
+foreach ($p in 'plugin.json','mcp_config.json','assets','dist','server') { Remove-Item -Recurse -Force (Join-Path $dest $p) -ErrorAction SilentlyContinue }
+New-Item -ItemType Directory -Path $dest -Force | Out-Null
+Expand-Archive -Path $zip -DestinationPath $dest -Force
+uv --project (Join-Path $dest 'server') sync --no-dev
 ```
 
-macOS / Linux 环境手动构建：
+#### macOS / Linux
 
 ```bash
-npm --prefix frontend install && npm --prefix frontend run build
-uv --project backend sync --no-dev
+DEST="$HOME/.gemini/config/plugins/tokenstar"
+TMP_ZIP="$(mktemp -t tokenstar-plugin.XXXXXX.zip)"
+curl -fL 'https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/latest/download/tokenstar-plugin.zip' -o "$TMP_ZIP"
+rm -rf "$DEST/plugin.json" "$DEST/mcp_config.json" "$DEST/assets" "$DEST/dist" "$DEST/server"
+mkdir -p "$DEST" && unzip -o "$TMP_ZIP" -d "$DEST" && rm -f "$TMP_ZIP"
+uv --project "$DEST/server" sync --no-dev
 ```
 
-### 2. 方式 A：安装为 Antigravity MCP App 插件
+#### 交给 Antigravity Agent 一句话安装
 
-一键打包并安装至 `~/.gemini/config/plugins/tokenstar`（自动通过 `uv sync --no-dev` 初始化隔离虚拟环境）：
+把下面这段话直接发给你的 Antigravity Agent，即可跨平台自动完成安装：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/install-plugin.ps1
+> 请从 https://github.com/ivvan3016/gemini-tokenstar-plugin 安装 TokenStar 插件到 `~/.gemini/config/plugins/tokenstar`（优先下载最新 GitHub Release 的 `tokenstar-plugin.zip` 预构建包以跳过 Node.js；或 clone 仓库后执行 `scripts/install.py` / `scripts/install-plugin.ps1` / `scripts/install-plugin.sh`），随后运行 `uv --project ~/.gemini/config/plugins/tokenstar/server sync --no-dev`。安装过程不要修改 `~/.gemini/config/config.json`。
+
+插件目录 `~/.gemini/config/plugins/tokenstar` 的完整结构如下：
+
+```text
+~/.gemini/config/plugins/tokenstar/
+├── plugin.json
+├── mcp_config.json
+├── assets/
+│   └── logo.svg
+├── dist/
+│   └── app.html
+└── server/
+    ├── pyproject.toml
+    ├── uv.lock
+    └── src/
 ```
 
-可选参数：
+### 方式 B：从源码构建安装（Windows / macOS / Linux）
 
-| 参数 | 说明 |
-| :--- | :--- |
-| `-TargetDir <path>` | 自定义插件安装目录（默认 `"$HOME\.gemini\config\plugins\tokenstar"`） |
-| `-SkipBuild` | 复用已有 `dist/app.html`，跳过前端构建与测试步骤 |
-| `-SkipSync` | 跳过 `uv --project <TargetDir>\server sync --no-dev`（仅用于离线 CI 打包校验） |
+克隆仓库后，按系统运行一条命令即可完成安装（首次运行会自动安装 `frontend/node_modules`、打包单文件 `dist/app.html`、复制插件文件至 `~/.gemini/config/plugins/tokenstar` 并同步 `uv` 环境）：
+
+```bash
+git clone https://github.com/ivvan3016/gemini-tokenstar-plugin.git
+cd gemini-tokenstar-plugin
+```
+
+- **Windows (PowerShell)：**
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts/install-plugin.ps1
+  ```
+
+- **macOS / Linux：**
+
+  ```bash
+  bash scripts/install-plugin.sh
+  ```
+
+- **跨平台 Python（`scripts/install.py`）：**
+
+  ```bash
+  uv run --no-project python scripts/install.py
+  ```
+
+安装脚本常用参数：
+
+| Windows (`install-plugin.ps1`) | macOS / Linux (`install-plugin.sh`) | 跨平台 (`install.py`) | 说明 |
+| :--- | :--- | :--- | :--- |
+| `-TargetDir <path>` | `--target-dir <path>` | `--target-dir <path>` | 自定义安装目录（默认：`~/.gemini/config/plugins/tokenstar`） |
+| `-Verify` | `--verify` | `--verify` | 从源码构建时同时运行完整 TypeScript、Vitest 与 Pytest 测试 |
+| `-SkipBuild` | `--skip-build` | `--skip-build` | 复用已有 `dist/app.html`，跳过前端构建 |
+| `-SkipSync` | `--skip-sync` | `--skip-sync` | 跳过 `uv --project <TargetDir>/server sync --no-dev`（离线打包校验用） |
+| — | — | `--from-release [TAG]` | 从 GitHub Releases 下载并安装预构建包（默认 `latest`） |
+| — | — | `--from-zip <path>` | 从本地预构建 `tokenstar-plugin.zip` 压缩包安装 |
+| — | — | `--pack <output.zip>` | 构建并生成可分发的插件 Release 压缩包 |
+
+#### 在 Antigravity 中打开
 
 安装完成后 Antigravity 会自动发现该插件，可通过以下任意方式打开：
 
@@ -115,14 +176,21 @@ powershell -ExecutionPolicy Bypass -File scripts/install-plugin.ps1
 直接删除插件隔离目录即可（无任何全局配置残留）：
 
 ```powershell
+# Windows (PowerShell)
 Remove-Item -Recurse -Force "$HOME\.gemini\config\plugins\tokenstar"
 ```
 
-### 3. 方式 B：独立 Web 模式运行
+```bash
+# macOS / Linux
+rm -rf "$HOME/.gemini/config/plugins/tokenstar"
+```
 
-启动本地 Starlette 服务并在默认浏览器中打开观测界面：
+### 方式 C：独立 Web 模式运行
 
-```powershell
+若仓库中尚未生成 `dist/app.html`，先构建一次前端单文件包，再启动本地 Starlette 服务：
+
+```bash
+npm --prefix frontend ci && npm --prefix frontend run build
 uv --project backend run tokenstar-web --open
 ```
 
@@ -138,17 +206,19 @@ uv --project backend run tokenstar-web --open
 
 ## 开发与测试
 
-执行完整构建与前后端测试流水线（`tsc --noEmit`、Vitest 单测、单文件 `dist/app.html` 体积与零外链审计、后端 Pytest 测试）：
+在 Windows 上执行完整构建与前后端测试流水线（缺少 `frontend/node_modules` 时会自动安装依赖，随后依次运行 `tsc --noEmit`、Vitest 单测、单文件 `dist/app.html` 体积与零外链审计及后端 Pytest；传入 `-SkipTests` 可仅构建）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 ```
 
-分模块单独测试命令：
+跨平台分模块测试与构建命令：
 
-```powershell
+```bash
+npm --prefix frontend ci
 npm --prefix frontend run typecheck
 npm --prefix frontend run test
+npm --prefix frontend run build
 uv --project backend run pytest backend/tests -v
 ```
 
@@ -179,7 +249,9 @@ tokenstar-plugin/
 │   └── plugin.json         # Antigravity 插件元信息与推荐提示词
 ├── scripts/
 │   ├── build.ps1           # 全量验证与单文件构建脚本
-│   └── install-plugin.ps1  # 隔离插件打包与 uv 环境同步脚本
+│   ├── install.py          # 跨平台源码安装与 Release 打包脚本
+│   ├── install-plugin.ps1  # Windows 隔离插件打包与 uv 环境同步脚本
+│   └── install-plugin.sh   # macOS / Linux 隔离插件打包与 uv 环境同步脚本
 ├── LICENSE                 # MIT 开源协议
 ├── README.md               # 英文主文档
 └── README_zh.md            # 简体中文文档

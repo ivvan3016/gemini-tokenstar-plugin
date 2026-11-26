@@ -1,3 +1,8 @@
+[CmdletBinding()]
+param(
+    [switch]$SkipTests
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -29,12 +34,30 @@ if (Test-Path -LiteralPath $PortableNodeDir -PathType Container) {
     $env:Path = "$ResolvedNodeDir$([System.IO.Path]::PathSeparator)$env:Path"
 }
 
-Invoke-Checked -Description 'Frontend TypeScript check' -Command {
-    & npm.cmd --prefix $FrontendDir run typecheck
+$TscBin = Join-Path $FrontendDir 'node_modules\.bin\tsc.cmd'
+$ViteBin = Join-Path $FrontendDir 'node_modules\.bin\vite.cmd'
+if (-not ((Test-Path -LiteralPath $TscBin -PathType Leaf) -and (Test-Path -LiteralPath $ViteBin -PathType Leaf))) {
+    $LockFile = Join-Path $FrontendDir 'package-lock.json'
+    if (Test-Path -LiteralPath $LockFile -PathType Leaf) {
+        Invoke-Checked -Description 'Installing frontend dependencies (npm ci)' -Command {
+            & npm.cmd --prefix $FrontendDir ci
+        }
+    }
+    else {
+        Invoke-Checked -Description 'Installing frontend dependencies (npm install)' -Command {
+            & npm.cmd --prefix $FrontendDir install
+        }
+    }
 }
 
-Invoke-Checked -Description 'Frontend Vitest suite' -Command {
-    & npm.cmd --prefix $FrontendDir run test
+if (-not $SkipTests) {
+    Invoke-Checked -Description 'Frontend TypeScript check' -Command {
+        & npm.cmd --prefix $FrontendDir run typecheck
+    }
+
+    Invoke-Checked -Description 'Frontend Vitest suite' -Command {
+        & npm.cmd --prefix $FrontendDir run test
+    }
 }
 
 Invoke-Checked -Description 'Frontend single-file production build' -Command {
@@ -69,9 +92,11 @@ if ([System.Text.RegularExpressions.Regex]::IsMatch($AppHtmlContent, $ExternalCs
 $SizeKiB = [Math]::Round($AppHtmlInfo.Length / 1024.0, 2)
 Write-Host ("Validated dist/app.html ({0} KiB, 0 external script/link/CSS URLs)." -f $SizeKiB) -ForegroundColor Green
 
-$BackendTestsDir = Join-Path $BackendDir 'tests'
-Invoke-Checked -Description 'Backend Pytest suite' -Command {
-    & uv --project $BackendDir run pytest $BackendTestsDir -v
+if (-not $SkipTests) {
+    $BackendTestsDir = Join-Path $BackendDir 'tests'
+    Invoke-Checked -Description 'Backend Pytest suite' -Command {
+        & uv --project $BackendDir run pytest $BackendTestsDir -v
+    }
 }
 
 Write-Host 'TokenStar build and verification succeeded.' -ForegroundColor Green

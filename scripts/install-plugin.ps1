@@ -2,7 +2,8 @@
 param(
     [string]$TargetDir = (Join-Path $HOME '.gemini\config\plugins\tokenstar'),
     [switch]$SkipBuild,
-    [switch]$SkipSync
+    [switch]$SkipSync,
+    [switch]$Verify
 )
 
 Set-StrictMode -Version Latest
@@ -60,7 +61,13 @@ if ($ResolvedTargetDir.TrimEnd('\', '/') -eq $RootDrive.TrimEnd('\', '/')) {
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 if (-not $SkipBuild) {
-    & (Join-Path $PSScriptRoot 'build.ps1')
+    $BuildScript = Join-Path $PSScriptRoot 'build.ps1'
+    if ($Verify) {
+        & $BuildScript
+    }
+    else {
+        & $BuildScript -SkipTests
+    }
 }
 
 $PluginManifestSrc = Join-Path $RepoRoot 'plugin\plugin.json'

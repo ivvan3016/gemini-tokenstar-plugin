@@ -69,40 +69,101 @@ flowchart LR
 
 ## Prerequisites
 
-- **Python 3.12–3.13** with [`uv`](https://docs.astral.sh/uv/)
-- **Node.js (>= 20) & npm** (automatically picked up from `.tools/nodejs` if present)
-- **Antigravity** (for MCP App plugin mode; Standalone Web Mode runs without Antigravity)
+- **Prebuilt Release Install (Recommended):** Only [`uv`](https://docs.astral.sh/uv/) is required (`uv` automatically manages Python 3.12–3.13; **no Node.js required**).
+- **Building from Source / Development:** [`uv`](https://docs.astral.sh/uv/) + **Node.js (>= 20) & npm** (automatically picked up from `.tools/nodejs` if present) + **Git**.
+- **Antigravity:** Required for MCP App plugin mode (`uv` must be visible on your system `PATH` when Antigravity launches `tokenstar-mcp`). Standalone Web Mode runs without Antigravity.
 
 ## Quick Start
 
-### 1. Build the Single-File Bundle
+### Option A — Fast Install from Prebuilt Release (Recommended, No Node.js Needed)
+
+Download the prebuilt `tokenstar-plugin.zip` asset from [GitHub Releases](https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/latest), extract it into `~/.gemini/config/plugins/tokenstar`, and sync the isolated server environment:
+
+#### Windows (PowerShell)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build.ps1
+$dest = Join-Path $HOME '.gemini\config\plugins\tokenstar'
+$zip = Join-Path $env:TEMP 'tokenstar-plugin.zip'
+Invoke-WebRequest 'https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/latest/download/tokenstar-plugin.zip' -OutFile $zip
+foreach ($p in 'plugin.json','mcp_config.json','assets','dist','server') { Remove-Item -Recurse -Force (Join-Path $dest $p) -ErrorAction SilentlyContinue }
+New-Item -ItemType Directory -Path $dest -Force | Out-Null
+Expand-Archive -Path $zip -DestinationPath $dest -Force
+uv --project (Join-Path $dest 'server') sync --no-dev
 ```
 
-On macOS / Linux shells:
+#### macOS / Linux
 
 ```bash
-npm --prefix frontend install && npm --prefix frontend run build
-uv --project backend sync --no-dev
+DEST="$HOME/.gemini/config/plugins/tokenstar"
+TMP_ZIP="$(mktemp -t tokenstar-plugin.XXXXXX.zip)"
+curl -fL 'https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/latest/download/tokenstar-plugin.zip' -o "$TMP_ZIP"
+rm -rf "$DEST/plugin.json" "$DEST/mcp_config.json" "$DEST/assets" "$DEST/dist" "$DEST/server"
+mkdir -p "$DEST" && unzip -o "$TMP_ZIP" -d "$DEST" && rm -f "$TMP_ZIP"
+uv --project "$DEST/server" sync --no-dev
 ```
 
-### 2. Option A — Install as an Antigravity MCP App Plugin
+#### Install with an Antigravity Agent
 
-Package and install into `~/.gemini/config/plugins/tokenstar` (automatically syncs an isolated runtime `.venv` via `uv sync --no-dev`):
+Paste this prompt to your Antigravity Agent to have it install TokenStar directly:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/install-plugin.ps1
+> Install the TokenStar plugin from https://github.com/ivvan3016/gemini-tokenstar-plugin into `~/.gemini/config/plugins/tokenstar` (prefer the `tokenstar-plugin.zip` asset from the latest GitHub Release so Node.js is unnecessary, or clone the repo and run `scripts/install.py` / `scripts/install-plugin.ps1` / `scripts/install-plugin.sh`), then run `uv --project ~/.gemini/config/plugins/tokenstar/server sync --no-dev`. Do not modify `~/.gemini/config/config.json`.
+
+Expected layout inside `~/.gemini/config/plugins/tokenstar`:
+
+```text
+~/.gemini/config/plugins/tokenstar/
+├── plugin.json
+├── mcp_config.json
+├── assets/
+│   └── logo.svg
+├── dist/
+│   └── app.html
+└── server/
+    ├── pyproject.toml
+    ├── uv.lock
+    └── src/
 ```
 
-Optional installer flags:
+### Option B — Install from Source (Windows / macOS / Linux)
 
-| Flag | Description |
-| :--- | :--- |
-| `-TargetDir <path>` | Override installation directory (default: `$HOME\.gemini\config\plugins\tokenstar`) |
-| `-SkipBuild` | Stage using an existing `dist/app.html` without re-running `scripts/build.ps1` |
-| `-SkipSync` | Skip `uv --project <TargetDir>\server sync --no-dev` (for offline CI staging) |
+Clone the repository and run the single installer command for your OS (first-time runs automatically install `frontend/node_modules`, compile `dist/app.html`, stage `~/.gemini/config/plugins/tokenstar`, and run `uv sync --no-dev`):
+
+```bash
+git clone https://github.com/ivvan3016/gemini-tokenstar-plugin.git
+cd gemini-tokenstar-plugin
+```
+
+- **Windows (PowerShell):**
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts/install-plugin.ps1
+  ```
+
+- **macOS / Linux:**
+
+  ```bash
+  bash scripts/install-plugin.sh
+  ```
+
+- **Cross-platform Python (`scripts/install.py`):**
+
+  ```bash
+  uv run --no-project python scripts/install.py
+  ```
+
+Installer options:
+
+| Windows (`install-plugin.ps1`) | macOS / Linux (`install-plugin.sh`) | Cross-Platform (`install.py`) | Description |
+| :--- | :--- | :--- | :--- |
+| `-TargetDir <path>` | `--target-dir <path>` | `--target-dir <path>` | Override installation directory (default: `~/.gemini/config/plugins/tokenstar`) |
+| `-Verify` | `--verify` | `--verify` | Run full TypeScript, Vitest, and Pytest checks while building from source |
+| `-SkipBuild` | `--skip-build` | `--skip-build` | Stage using an existing `dist/app.html` without rebuilding |
+| `-SkipSync` | `--skip-sync` | `--skip-sync` | Skip `uv --project <TargetDir>/server sync --no-dev` (for offline staging) |
+| — | — | `--from-release [TAG]` | Download and install prebuilt `tokenstar-plugin.zip` from GitHub Releases (defaults to `latest`) |
+| — | — | `--from-zip <path>` | Install from a local prebuilt `tokenstar-plugin.zip` archive |
+| — | — | `--pack <output.zip>` | Build (unless `--skip-build`) and create a portable release zip archive |
+
+#### Open TokenStar in Antigravity
 
 Once staged, Antigravity automatically discovers the plugin:
 
@@ -115,14 +176,21 @@ Once staged, Antigravity automatically discovers the plugin:
 Remove the isolated directory directly (no global config changes to revert):
 
 ```powershell
+# Windows (PowerShell)
 Remove-Item -Recurse -Force "$HOME\.gemini\config\plugins\tokenstar"
 ```
 
-### 3. Option B — Standalone Web Mode
+```bash
+# macOS / Linux
+rm -rf "$HOME/.gemini/config/plugins/tokenstar"
+```
 
-Launch the local Starlette observatory server and open it in your browser:
+### Option C — Standalone Web Mode
 
-```powershell
+If `dist/app.html` has not been built yet, build the frontend bundle once and launch the local Starlette observatory server:
+
+```bash
+npm --prefix frontend ci && npm --prefix frontend run build
 uv --project backend run tokenstar-web --open
 ```
 
@@ -138,17 +206,19 @@ Available CLI options for `tokenstar-web`:
 
 ## Development & Verification
 
-Run all checks (TypeScript `tsc --noEmit`, Vitest suite, Vite single-file build & external-URL audit, and backend Pytest suite):
+Run the full build and verification pipeline on Windows (automatically installs `frontend/node_modules` if missing, then runs TypeScript `tsc --noEmit`, Vitest suite, Vite single-file build & external-URL audit, and backend Pytest suite; pass `-SkipTests` for build-only):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 ```
 
-Or run frontend / backend suites individually:
+Or run cross-platform frontend / backend suites individually:
 
-```powershell
+```bash
+npm --prefix frontend ci
 npm --prefix frontend run typecheck
 npm --prefix frontend run test
+npm --prefix frontend run build
 uv --project backend run pytest backend/tests -v
 ```
 
@@ -179,7 +249,9 @@ tokenstar-plugin/
 │   └── plugin.json         # Antigravity plugin metadata & suggested prompts
 ├── scripts/
 │   ├── build.ps1           # Full verification & single-file HTML build script
-│   └── install-plugin.ps1  # Isolated plugin bundler & uv runtime sync
+│   ├── install.py          # Cross-platform source installer & release packager
+│   ├── install-plugin.ps1  # Windows isolated plugin bundler & uv runtime sync
+│   └── install-plugin.sh   # macOS / Linux isolated plugin bundler & uv runtime sync
 ├── LICENSE                 # MIT License
 ├── README.md               # English documentation
 └── README_zh.md            # 简体中文文档

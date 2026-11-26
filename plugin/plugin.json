@@ -3,6 +3,8 @@
   "displayName": "TokenStar",
   "version": "0.1.0",
   "description": "Interactive starry-sky observatory and token usage analytics for local Antigravity conversation logs.",
+  "homepage": "https://github.com/ivvan3016/gemini-tokenstar-plugin",
+  "repository": "https://github.com/ivvan3016/gemini-tokenstar-plugin",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
     "打开 TokenStar 星空，查看我最近的 Antigravity 对话星图与 Token 消耗总览",
