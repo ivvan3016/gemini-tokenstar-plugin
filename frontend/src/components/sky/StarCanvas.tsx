@@ -1374,7 +1374,7 @@ export function StarCanvas({
             const isInActiveConv = activeConvIds.has(node.star.id);
             const isDateHighlighted = Boolean(
               currHighlightDate &&
-                (node.request.local_date === currHighlightDate || node.star.local_date === currHighlightDate),
+                (node.request.local_date || node.star.local_date) === currHighlightDate,
             );
             const isMatch = !currFiltered || !currMatching || currMatching.has(node.id);
             const alpha = isDateHighlighted || isInActiveConv ? (isMatch ? 1 : 0.25) : isMatch ? 1 : 0.16;
@@ -1494,7 +1494,7 @@ export function StarCanvas({
           const isInActiveConv = activeConvIds.has(node.star.id);
           const isDateHighlighted = Boolean(
             currHighlightDate &&
-              (node.request.local_date === currHighlightDate || node.star.local_date === currHighlightDate),
+              (node.request.local_date || node.star.local_date) === currHighlightDate,
           );
           const isMatch = !currFiltered || !currMatching || currMatching.has(node.id);
           const alpha = isDateHighlighted || isInActiveConv ? (isMatch ? 1 : 0.25) : isMatch ? 1 : 0.16;

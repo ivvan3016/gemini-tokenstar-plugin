@@ -1,4 +1,5 @@
 import type { ConversationStar, StarFilterState } from '../types/sky';
+import { getEffectiveRequests, starHasActivityOnDate } from './metrics';
 import type { StarNode } from './starLayout';
 
 /**
@@ -17,8 +18,8 @@ export function getDisplayTitle(
 }
 
 /**
- * Filter conversations by model, celestial type, optional local date, and
- * keyword. In privacy mode, keyword matching excludes titles to prevent leaks.
+ * Filter conversations by model, celestial type, optional request-activity date,
+ * and keyword. In privacy mode, keyword matching excludes titles to prevent leaks.
  */
 export function filterConversations(
   stars: ConversationStar[],
@@ -44,7 +45,7 @@ export function filterConversations(
       return false;
     }
 
-    if (dateFilter && star.local_date !== dateFilter) {
+    if (dateFilter && !starHasActivityOnDate(star, dateFilter)) {
       return false;
     }
 
@@ -52,7 +53,10 @@ export function filterConversations(
       const modelMatch =
         star.primary_model.toLowerCase().includes(query) ||
         star.models.some((m) => m.model.toLowerCase().includes(query));
-      const dateMatch = star.local_date.toLowerCase().includes(query);
+      const reqs = getEffectiveRequests(star);
+      const dateMatch =
+        star.local_date.toLowerCase().includes(query) ||
+        reqs.some((r) => (r.local_date || star.local_date).toLowerCase().includes(query));
       if (privacyMode) {
         return modelMatch || dateMatch;
       }
@@ -65,7 +69,7 @@ export function filterConversations(
 }
 
 /**
- * Filter request-level star nodes by request model, celestial type, local date,
+ * Filter request-level star nodes by request model, celestial type, actual local date,
  * and keyword. In privacy mode, keyword matching excludes conversation titles.
  */
 export function filterStarNodes(
@@ -80,6 +84,7 @@ export function filterStarNodes(
 
   return nodes.filter((node) => {
     const { request, star } = node;
+    const reqDate = request.local_date || star.local_date;
 
     if (hasModels && !filter.models.includes(request.model)) {
       return false;
@@ -89,15 +94,13 @@ export function filterStarNodes(
       return false;
     }
 
-    if (dateFilter && request.local_date !== dateFilter && star.local_date !== dateFilter) {
+    if (dateFilter && reqDate !== dateFilter) {
       return false;
     }
 
     if (query) {
       const modelMatch = request.model.toLowerCase().includes(query);
-      const dateMatch =
-        request.local_date.toLowerCase().includes(query) ||
-        star.local_date.toLowerCase().includes(query);
+      const dateMatch = reqDate.toLowerCase().includes(query);
       const roleMatch = request.subagent_role.toLowerCase().includes(query);
       if (privacyMode) {
         return modelMatch || dateMatch || roleMatch;

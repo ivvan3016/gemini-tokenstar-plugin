@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ConversationStar, SourceScanReport, TokenMode } from '../../types/sky';
-import { computeSummary } from '../../logic/metrics';
+import { computeSummary, starHasActivityOnDate } from '../../logic/metrics';
 import {
   CELESTIAL_META,
   CELESTIAL_ORDER,
@@ -61,7 +61,7 @@ export function StatsTab({
     if (!focusStatsStarId) return;
     setHighlightedStarId(focusStatsStarId);
     const target = stars.find((s) => s.id === focusStatsStarId);
-    if (selectedDate && target && target.local_date !== selectedDate) {
+    if (selectedDate && target && !starHasActivityOnDate(target, selectedDate)) {
       setSelectedDate(null);
     }
     onClearFocusStatsStar?.();
@@ -214,7 +214,7 @@ export function StatsTab({
             <span className="ts-kpi-unit">活跃天</span>
           </div>
           <div className="ts-kpi-sub ts-tabular">
-            最近对话：{formatLatestTimestamp(summary.latestStartedAt)}
+            最近活跃：{formatLatestTimestamp(summary.latestStartedAt)}
           </div>
         </article>
       </section>

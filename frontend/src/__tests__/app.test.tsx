@@ -936,4 +936,137 @@ describe('TopBar, StarHeatmap, UsageTables, StatsTab & App Integration', () => {
     });
     expect(container.textContent).toContain('2026-06-15 · 1 次对话 · 2,500 Tokens');
   });
+
+  it('supports per-request 按请求明细 view, slices 按对话 metrics by selectedDate, and locates exact request star', () => {
+    const conv = makeStar({
+      id: 'multi-day-conv',
+      title: 'Confidential Multi-Day Task',
+      started_at: '2026-06-15T09:00:00Z',
+      ended_at: '2026-06-17T14:20:05Z',
+      local_date: '2026-06-15',
+      total_tokens: 9000,
+      non_cache_tokens: 3000,
+      requests: [
+        {
+          id: 'multi-day-conv:0',
+          conversation_id: 'multi-day-conv',
+          session_id: 'multi-day-conv',
+          step_index: 0,
+          turn_index: 1,
+          created_at: '2026-06-15T09:00:00Z',
+          local_date: '2026-06-15',
+          model: 'gemini-2.5-pro',
+          input_tokens: 1000,
+          cache_read_tokens: 2000,
+          output_tokens: 500,
+          total_tokens: 3500,
+          non_cache_tokens: 1500,
+          tool_calls_count: 1,
+          subagent_calls_count: 0,
+          status: 'COMPLETED',
+          is_subagent: false,
+          subagent_role: '',
+          celestial_type: 'star',
+          celestial_reason: '第一轮',
+        },
+        {
+          id: 'multi-day-conv:1',
+          conversation_id: 'multi-day-conv',
+          session_id: 'multi-day-conv',
+          step_index: 1,
+          turn_index: 2,
+          created_at: '2026-06-17T14:20:05Z',
+          local_date: '2026-06-17',
+          model: 'gemini-2.5-flash',
+          input_tokens: 1000,
+          cache_read_tokens: 4000,
+          output_tokens: 500,
+          total_tokens: 5500,
+          non_cache_tokens: 1500,
+          tool_calls_count: 4,
+          subagent_calls_count: 0,
+          status: 'COMPLETED',
+          is_subagent: false,
+          subagent_role: '',
+          celestial_type: 'pulsar',
+          celestial_reason: '跨天继续',
+        },
+      ],
+    });
+    const onLocateStar = vi.fn();
+
+    act(() => {
+      root.render(
+        <UsageTables
+          stars={[conv]}
+          tokenMode="total"
+          privacyMode={true}
+          selectedDate="2026-06-17"
+          onClearDateFilter={vi.fn()}
+          onLocateStar={onLocateStar}
+          onHighlightDateInSky={vi.fn()}
+        />,
+      );
+    });
+
+    // Under selectedDate='2026-06-17', 按对话 slices tokens & request counts strictly to June 17
+    expect(container.textContent).toContain('5,500');
+    expect(container.textContent).toContain('1 次请求');
+    expect(container.textContent).not.toContain('9,000');
+
+    // Switch to 按请求明细 tab -> respects privacyMode and selectedDate, locates exact request id
+    const reqTabBtn = findButtonByText(container, '按请求明细 (2)');
+    expect(reqTabBtn).toBeDefined();
+    act(() => {
+      reqTabBtn!.click();
+    });
+    const reqRows = Array.from(container.querySelectorAll('tbody tr'));
+    expect(reqRows).toHaveLength(1);
+    expect(reqRows[0].getAttribute('data-request-id')).toBe('multi-day-conv:1');
+    expect(container.textContent).toContain('80.0%');
+    expect(container.textContent).toContain('星体 #001');
+    expect(container.textContent).not.toContain('Confidential Multi-Day Task');
+
+    const locateBtn = reqRows[0].querySelector('button');
+    expect(locateBtn).not.toBeNull();
+    act(() => {
+      locateBtn!.click();
+    });
+    expect(onLocateStar).toHaveBeenCalledWith('multi-day-conv:1');
+
+    // Clear selectedDate and verify per-request 缓存命中率 values & sorting (66.7% vs 80.0%)
+    act(() => {
+      root.render(
+        <UsageTables
+          stars={[conv]}
+          tokenMode="total"
+          privacyMode={true}
+          selectedDate={null}
+          onClearDateFilter={vi.fn()}
+          onLocateStar={onLocateStar}
+          onHighlightDateInSky={vi.fn()}
+        />,
+      );
+    });
+    expect(container.textContent).toContain('66.7%');
+    expect(container.textContent).toContain('80.0%');
+
+    const sortCacheBtn = findButtonByText(container, '缓存命中率');
+    expect(sortCacheBtn).toBeDefined();
+    act(() => {
+      sortCacheBtn!.click();
+    });
+    let sortedIds = Array.from(container.querySelectorAll('tbody tr')).map((r) =>
+      r.getAttribute('data-request-id'),
+    );
+    expect(sortedIds).toEqual(['multi-day-conv:1', 'multi-day-conv:0']);
+
+    act(() => {
+      sortCacheBtn!.click();
+    });
+    sortedIds = Array.from(container.querySelectorAll('tbody tr')).map((r) =>
+      r.getAttribute('data-request-id'),
+    );
+    expect(sortedIds).toEqual(['multi-day-conv:0', 'multi-day-conv:1']);
+  });
 });

@@ -142,4 +142,58 @@ describe('filters', () => {
     expect(filterStarNodes(nodes, { ...base, query: 'Classified' }, true)).toHaveLength(0);
     expect(filterStarNodes(nodes, { ...base, query: 'research' }, true).map((n) => n.id)).toEqual(['c1:1']);
   });
+
+  it('matches multi-day conversations and individual request StarNodes strictly by actual request local_date', () => {
+    const reqDay1: RequestStar = {
+      id: 'm1:0',
+      conversation_id: 'm1',
+      session_id: 'm1',
+      step_index: 0,
+      turn_index: 1,
+      created_at: '2026-06-15T10:00:00Z',
+      local_date: '2026-06-15',
+      model: 'gemini-2.5-pro',
+      input_tokens: 100,
+      cache_read_tokens: 0,
+      output_tokens: 50,
+      total_tokens: 150,
+      non_cache_tokens: 150,
+      tool_calls_count: 0,
+      subagent_calls_count: 0,
+      status: 'COMPLETED',
+      is_subagent: false,
+      subagent_role: '',
+      celestial_type: 'star',
+      celestial_reason: '首日请求',
+    };
+    const reqDay2: RequestStar = {
+      ...reqDay1,
+      id: 'm1:1',
+      step_index: 1,
+      turn_index: 2,
+      created_at: '2026-06-18T15:30:00Z',
+      local_date: '2026-06-18',
+    };
+    const conv = makeStar({
+      id: 'm1',
+      started_at: '2026-06-15T10:00:00Z',
+      ended_at: '2026-06-18T15:30:00Z',
+      local_date: '2026-06-15',
+      requests: [reqDay1, reqDay2],
+    });
+
+    const base: StarFilterState = {
+      query: '',
+      models: [],
+      celestialTypes: [],
+      date: null,
+    };
+
+    expect(filterConversations([conv], { ...base, date: '2026-06-18' }, false)).toEqual([conv]);
+    expect(filterConversations([conv], { ...base, date: '2026-06-17' }, false)).toEqual([]);
+
+    const nodes = computeStarPositions([conv], 'total');
+    expect(filterStarNodes(nodes, { ...base, date: '2026-06-15' }, false).map((n) => n.id)).toEqual(['m1:0']);
+    expect(filterStarNodes(nodes, { ...base, date: '2026-06-18' }, false).map((n) => n.id)).toEqual(['m1:1']);
+  });
 });

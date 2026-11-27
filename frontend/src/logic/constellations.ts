@@ -231,7 +231,7 @@ function makeConstellationSegment(
   const [fromItem, toItem] = a.index <= b.index ? [a, b] : [b, a];
   return {
     conversationId,
-    date: toItem.node.star.local_date,
+    date: toItem.node.request.local_date || toItem.node.star.local_date,
     from: fromItem.node,
     to: toItem.node,
     fromIndex: fromItem.index,

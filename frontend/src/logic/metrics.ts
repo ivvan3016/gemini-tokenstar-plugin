@@ -1,4 +1,4 @@
-import type { CelestialType, ConversationStar, TokenMode } from '../types/sky';
+import type { CelestialType, ConversationStar, RequestStar, TokenMode } from '../types/sky';
 import { getModelSpectralColor } from './starLayout';
 
 export interface SkySummary {
@@ -22,6 +22,7 @@ export interface HeatmapCell {
   inYear: boolean;
   tokens: number;
   count: number;
+  requestCount: number;
   conversations: ConversationStar[];
   level: 0 | 1 | 2 | 3 | 4;
 }
@@ -50,6 +51,7 @@ export interface ModelSummary {
 export interface DailySummary {
   date: string;
   conversationCount: number;
+  requestCount: number;
   tokens: number;
   inputTokens: number;
   cacheReadTokens: number;
@@ -59,11 +61,180 @@ export interface DailySummary {
   conversations: ConversationStar[];
 }
 
+export interface ConversationDateMetrics {
+  tokens: number;
+  inputTokens: number;
+  cacheReadTokens: number;
+  outputTokens: number;
+  requestCount: number;
+  toolCallsCount: number;
+  primaryModel: string;
+  latestTime: string;
+  earliestTime: string;
+}
+
 const MS_PER_DAY = 86_400_000;
 
 /** Return the active token total for a conversation under the selected mode. */
 export function effectiveTokens(star: ConversationStar, mode: TokenMode): number {
   return mode === 'total' ? star.total_tokens : star.non_cache_tokens;
+}
+
+/** Return the active token count for an individual request under the selected mode. */
+export function requestEffectiveTokens(
+  req: Pick<RequestStar, 'total_tokens' | 'non_cache_tokens'>,
+  mode: TokenMode,
+): number {
+  return mode === 'total' ? req.total_tokens : req.non_cache_tokens;
+}
+
+/** Return cache hit rate (`cache_read / (input + cache_read)`) for a single request. */
+export function requestCacheHitRate(
+  req: Pick<RequestStar, 'input_tokens' | 'cache_read_tokens'>,
+): number {
+  const denom = req.input_tokens + req.cache_read_tokens;
+  return denom > 0 ? req.cache_read_tokens / denom : 0;
+}
+
+/** Return the request list for a conversation, synthesizing a fallback entry if absent. */
+export function getEffectiveRequests(star: ConversationStar): RequestStar[] {
+  if (star.requests && star.requests.length > 0) {
+    return star.requests;
+  }
+  return [
+    {
+      id: `${star.id}:0`,
+      conversation_id: star.id,
+      session_id: star.id,
+      step_index: 0,
+      turn_index: star.user_turns,
+      created_at: star.started_at,
+      local_date: star.local_date,
+      model: star.primary_model,
+      input_tokens: star.input_tokens,
+      cache_read_tokens: star.cache_read_tokens,
+      output_tokens: star.output_tokens,
+      total_tokens: star.total_tokens,
+      non_cache_tokens: star.non_cache_tokens,
+      tool_calls_count: star.tool_calls_count,
+      subagent_calls_count: star.subagent_calls_count,
+      status: star.last_status,
+      is_subagent: star.is_orphan_subagent,
+      subagent_role: '',
+      celestial_type: star.celestial_type,
+      celestial_reason: star.celestial_reason,
+    },
+  ];
+}
+
+/** Return true if any request within the conversation occurred on `date`. */
+export function starHasActivityOnDate(star: ConversationStar, date: string): boolean {
+  if (!date) return true;
+  for (const req of getEffectiveRequests(star)) {
+    if ((req.local_date || star.local_date) === date) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Compare two ISO timestamp strings ascending, falling back to string comparison. */
+export function compareTimestampsAsc(a: string, b: string): number {
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) {
+    return ta - tb;
+  }
+  return a.localeCompare(b);
+}
+
+function pickBoundaryIso(current: string, candidate: string, mode: 'latest' | 'earliest'): string {
+  if (!candidate) return current;
+  if (!current) return candidate;
+  const cmp = compareTimestampsAsc(candidate, current);
+  return mode === 'latest' ? (cmp > 0 ? candidate : current) : cmp < 0 ? candidate : current;
+}
+
+/** Return the most recent activity timestamp for a conversation across all its requests. */
+export function getConversationLatestTimestamp(star: ConversationStar): string {
+  let latest = pickBoundaryIso(star.started_at || '', star.ended_at || '', 'latest');
+  for (const req of getEffectiveRequests(star)) {
+    latest = pickBoundaryIso(latest, req.created_at, 'latest');
+  }
+  return latest;
+}
+
+/** Compute conversation-level metrics either in full or sliced to requests on `date`. */
+export function computeConversationDateMetrics(
+  star: ConversationStar,
+  date: string | null,
+  mode: TokenMode,
+): ConversationDateMetrics {
+  const reqs = getEffectiveRequests(star);
+  if (!date) {
+    return {
+      tokens: effectiveTokens(star, mode),
+      inputTokens: star.input_tokens,
+      cacheReadTokens: star.cache_read_tokens,
+      outputTokens: star.output_tokens,
+      requestCount:
+        star.requests && star.requests.length > 0
+          ? star.requests.length
+          : Math.max(1, star.model_steps_count),
+      toolCallsCount: star.tool_calls_count,
+      primaryModel: star.primary_model || 'unknown',
+      latestTime: getConversationLatestTimestamp(star),
+      earliestTime: star.started_at,
+    };
+  }
+
+  let tokens = 0;
+  let inputTokens = 0;
+  let cacheReadTokens = 0;
+  let outputTokens = 0;
+  let requestCount = 0;
+  let toolCallsCount = 0;
+  let latestTime = '';
+  let earliestTime = '';
+  const modelTotals = new Map<string, number>();
+
+  for (const req of reqs) {
+    if ((req.local_date || star.local_date) !== date) {
+      continue;
+    }
+    const eff = requestEffectiveTokens(req, mode);
+    tokens += eff;
+    inputTokens += req.input_tokens;
+    cacheReadTokens += req.cache_read_tokens;
+    outputTokens += req.output_tokens;
+    requestCount += 1;
+    toolCallsCount += req.tool_calls_count;
+    latestTime = pickBoundaryIso(latestTime, req.created_at, 'latest');
+    earliestTime = pickBoundaryIso(earliestTime, req.created_at, 'earliest');
+    const modelName = req.model || star.primary_model || 'unknown';
+    modelTotals.set(modelName, (modelTotals.get(modelName) ?? 0) + eff);
+  }
+
+  let primaryModel = star.primary_model || 'unknown';
+  let bestTokens = -1;
+  for (const [model, tok] of modelTotals.entries()) {
+    if (tok > bestTokens) {
+      bestTokens = tok;
+      primaryModel = model;
+    }
+  }
+
+  return {
+    tokens,
+    inputTokens,
+    cacheReadTokens,
+    outputTokens,
+    requestCount,
+    toolCallsCount,
+    primaryModel,
+    latestTime: latestTime || getConversationLatestTimestamp(star),
+    earliestTime: earliestTime || star.started_at,
+  };
 }
 
 function parseUtcDayNumber(dateStr: string): number | null {
@@ -169,6 +340,19 @@ export function computeSummary(stars: ConversationStar[], mode: TokenMode): SkyS
   let latestTimestamp = Number.NEGATIVE_INFINITY;
   const activeDayNumbers = new Set<number>();
 
+  const considerTimestamp = (iso: string) => {
+    if (!iso) return;
+    const ts = Date.parse(iso);
+    if (Number.isFinite(ts)) {
+      if (ts > latestTimestamp) {
+        latestTimestamp = ts;
+        latestStartedAt = iso;
+      }
+    } else if (latestStartedAt === null) {
+      latestStartedAt = iso;
+    }
+  };
+
   for (const star of stars) {
     totalTokens += effectiveTokens(star, mode);
     alternateTokens += effectiveTokens(star, mode === 'total' ? 'non_cache' : 'total');
@@ -177,29 +361,18 @@ export function computeSummary(stars: ConversationStar[], mode: TokenMode): SkyS
     outputTokens += star.output_tokens;
     celestialCounts[star.celestial_type] += 1;
 
-    if (star.requests && star.requests.length > 0) {
-      totalRequests += star.requests.length;
-      for (const req of star.requests) {
-        requestCelestialCounts[req.celestial_type] += 1;
-      }
-    } else {
-      totalRequests += 1;
-      requestCelestialCounts[star.celestial_type] += 1;
-    }
+    considerTimestamp(star.started_at);
+    considerTimestamp(star.ended_at);
 
-    const dayNum = parseUtcDayNumber(star.local_date);
-    if (dayNum !== null) {
-      activeDayNumbers.add(dayNum);
-    }
-
-    const ts = Date.parse(star.started_at);
-    if (Number.isFinite(ts)) {
-      if (ts > latestTimestamp) {
-        latestTimestamp = ts;
-        latestStartedAt = star.started_at;
+    const reqs = getEffectiveRequests(star);
+    totalRequests += reqs.length;
+    for (const req of reqs) {
+      requestCelestialCounts[req.celestial_type] += 1;
+      const dayNum = parseUtcDayNumber(req.local_date || star.local_date);
+      if (dayNum !== null) {
+        activeDayNumbers.add(dayNum);
       }
-    } else if (latestStartedAt === null && star.started_at) {
-      latestStartedAt = star.started_at;
+      considerTimestamp(req.created_at);
     }
   }
 
@@ -224,26 +397,36 @@ export function computeSummary(stars: ConversationStar[], mode: TokenMode): SkyS
   };
 }
 
-/** Build a Sun–Sat weekly GitHub-style contribution heatmap for the target year. */
+/** Build a Sun–Sat weekly GitHub-style contribution heatmap attributed by each request's actual date. */
 export function computeDailyHeatmap(
   stars: ConversationStar[],
   year: number,
   mode: TokenMode,
 ): DailyHeatmapGrid {
   const yearPrefix = `${year}-`;
-  const buckets = new Map<string, { tokens: number; conversations: ConversationStar[] }>();
+  const buckets = new Map<
+    string,
+    { tokens: number; requestCount: number; convIds: Set<string>; conversations: ConversationStar[] }
+  >();
 
   for (const star of stars) {
-    if (!star.local_date.startsWith(yearPrefix)) {
-      continue;
+    for (const req of getEffectiveRequests(star)) {
+      const reqDate = req.local_date || star.local_date;
+      if (!reqDate.startsWith(yearPrefix)) {
+        continue;
+      }
+      let bucket = buckets.get(reqDate);
+      if (!bucket) {
+        bucket = { tokens: 0, requestCount: 0, convIds: new Set(), conversations: [] };
+        buckets.set(reqDate, bucket);
+      }
+      bucket.tokens += requestEffectiveTokens(req, mode);
+      bucket.requestCount += 1;
+      if (!bucket.convIds.has(star.id)) {
+        bucket.convIds.add(star.id);
+        bucket.conversations.push(star);
+      }
     }
-    let bucket = buckets.get(star.local_date);
-    if (!bucket) {
-      bucket = { tokens: 0, conversations: [] };
-      buckets.set(star.local_date, bucket);
-    }
-    bucket.tokens += effectiveTokens(star, mode);
-    bucket.conversations.push(star);
   }
 
   const positiveTotals: number[] = [];
@@ -287,6 +470,7 @@ export function computeDailyHeatmap(
       inYear,
       tokens,
       count: conversations.length,
+      requestCount: bucket?.requestCount ?? 0,
       conversations,
       level: inYear ? assignHeatmapLevel(tokens, thresholds, allEqualPositive) : 0,
     };
@@ -401,7 +585,7 @@ export function computeModelSummaries(
   });
 }
 
-/** Aggregate per-day usage metrics sorted reverse-chronologically. */
+/** Aggregate per-day usage metrics grouped by each request's actual `local_date`. */
 export function computeDailySummaries(
   stars: ConversationStar[],
   mode: TokenMode,
@@ -413,33 +597,44 @@ export function computeDailySummaries(
       inputTokens: number;
       cacheReadTokens: number;
       outputTokens: number;
+      requestCount: number;
       modelTotals: Map<string, number>;
+      convIds: Set<string>;
       conversations: ConversationStar[];
     }
   >();
 
   for (const star of stars) {
-    if (!star.local_date) continue;
-    let bucket = byDate.get(star.local_date);
-    if (!bucket) {
-      bucket = {
-        tokens: 0,
-        inputTokens: 0,
-        cacheReadTokens: 0,
-        outputTokens: 0,
-        modelTotals: new Map(),
-        conversations: [],
-      };
-      byDate.set(star.local_date, bucket);
+    for (const req of getEffectiveRequests(star)) {
+      const reqDate = req.local_date || star.local_date;
+      if (!reqDate) continue;
+      let bucket = byDate.get(reqDate);
+      if (!bucket) {
+        bucket = {
+          tokens: 0,
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          outputTokens: 0,
+          requestCount: 0,
+          modelTotals: new Map(),
+          convIds: new Set(),
+          conversations: [],
+        };
+        byDate.set(reqDate, bucket);
+      }
+      const eff = requestEffectiveTokens(req, mode);
+      bucket.tokens += eff;
+      bucket.inputTokens += req.input_tokens;
+      bucket.cacheReadTokens += req.cache_read_tokens;
+      bucket.outputTokens += req.output_tokens;
+      bucket.requestCount += 1;
+      if (!bucket.convIds.has(star.id)) {
+        bucket.convIds.add(star.id);
+        bucket.conversations.push(star);
+      }
+      const model = req.model || star.primary_model || 'unknown';
+      bucket.modelTotals.set(model, (bucket.modelTotals.get(model) ?? 0) + eff);
     }
-    const eff = effectiveTokens(star, mode);
-    bucket.tokens += eff;
-    bucket.inputTokens += star.input_tokens;
-    bucket.cacheReadTokens += star.cache_read_tokens;
-    bucket.outputTokens += star.output_tokens;
-    bucket.conversations.push(star);
-    const model = star.primary_model || 'unknown';
-    bucket.modelTotals.set(model, (bucket.modelTotals.get(model) ?? 0) + eff);
   }
 
   const rows: DailySummary[] = [];
@@ -455,6 +650,7 @@ export function computeDailySummaries(
     rows.push({
       date,
       conversationCount: bucket.conversations.length,
+      requestCount: bucket.requestCount,
       tokens: bucket.tokens,
       inputTokens: bucket.inputTokens,
       cacheReadTokens: bucket.cacheReadTokens,
@@ -468,13 +664,21 @@ export function computeDailySummaries(
   return rows.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-/** Return distinct calendar years present in `local_date`, sorted descending. */
+/** Return distinct calendar years present across request and conversation dates, sorted descending. */
 export function getAvailableYears(stars: ConversationStar[]): number[] {
   const years = new Set<number>();
-  for (const star of stars) {
-    const match = /^(\d{4})-/.exec(star.local_date);
+  const addDateYear = (dateStr: string) => {
+    const match = /^(\d{4})-/.exec(dateStr);
     if (match) {
       years.add(Number(match[1]));
+    }
+  };
+  for (const star of stars) {
+    addDateYear(star.local_date);
+    if (star.requests) {
+      for (const req of star.requests) {
+        addDateYear(req.local_date);
+      }
     }
   }
   if (years.size === 0) {

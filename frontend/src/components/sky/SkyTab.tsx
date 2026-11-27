@@ -185,9 +185,23 @@ export function SkyTab({
     [nodes, selectedStarId],
   );
 
-  // Focus on externally requested conversation (`focusStarId` from StatsTab)
+  // Focus on externally requested request star or conversation (`focusStarId` from StatsTab)
   useEffect(() => {
     if (!focusStarId) return;
+    const exactNode = nodes.find((n) => n.id === focusStarId);
+    if (exactNode) {
+      setPlaybackActive(false);
+      setIsPlaying(false);
+      setSelectedStarId(exactNode.id);
+      requestCamera({
+        x: exactNode.x,
+        y: exactNode.y,
+        zoom: Math.max(cameraRef.current.zoom, 1.85),
+      });
+      onClearFocus?.();
+      return;
+    }
+
     const convNodes = nodes.filter((n) => n.star.id === focusStarId);
     if (convNodes.length > 0) {
       const brightest = convNodes.reduce((best, curr) =>
@@ -213,7 +227,7 @@ export function SkyTab({
     onClearFocus?.();
   }, [focusStarId, nodes, onClearFocus, requestCamera]);
 
-  // Smoothly frame highlighted date cluster when `highlightDate` changes
+  // Smoothly frame highlighted date stars when `highlightDate` changes
   const prevHighlightDateRef = useRef<string | null>(null);
   useEffect(() => {
     if (!highlightDate || highlightDate === prevHighlightDateRef.current) {
@@ -223,7 +237,7 @@ export function SkyTab({
     prevHighlightDateRef.current = highlightDate;
     if (focusStarId) return;
     const dateNodes = nodes.filter(
-      (n) => n.request.local_date === highlightDate || n.star.local_date === highlightDate,
+      (n) => (n.request.local_date || n.star.local_date) === highlightDate,
     );
     if (dateNodes.length > 0) {
       const { width, height } = viewportRef.current;

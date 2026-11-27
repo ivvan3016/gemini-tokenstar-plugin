@@ -81,17 +81,29 @@ export function StarHeatmap({
     return map;
   }, [monthLabels]);
 
-  const { yearTokens, yearConversations, activeDaysInYear } = useMemo(() => {
+  const { yearTokens, yearConversations, yearRequests, activeDaysInYear } = useMemo(() => {
     let tokens = 0;
-    let convs = 0;
+    let requests = 0;
     let activeDays = 0;
+    const convIds = new Set<string>();
     for (const day of grid.days) {
       tokens += day.tokens;
-      convs += day.count;
-      if (day.count > 0) activeDays += 1;
+      requests += day.requestCount;
+      for (const conv of day.conversations) {
+        convIds.add(conv.id);
+      }
+      if (day.requestCount > 0 || day.count > 0) activeDays += 1;
     }
-    return { yearTokens: tokens, yearConversations: convs, activeDaysInYear: activeDays };
+    return {
+      yearTokens: tokens,
+      yearConversations: convIds.size,
+      yearRequests: requests,
+      activeDaysInYear: activeDays,
+    };
   }, [grid.days]);
+
+  const formatCellSummary = (cell: HeatmapCell) =>
+    `${cell.date} · ${cell.count} 次对话${cell.requestCount > cell.count ? `（${cell.requestCount} 次请求）` : ''} · ${formatTokenCount(cell.tokens)} Tokens`;
 
   return (
     <section className="ts-panel ts-heatmap-section" aria-label="年度星光贡献热力图">
@@ -99,7 +111,14 @@ export function StarHeatmap({
         <div className="ts-heatmap-title-group">
           <h2 className="ts-section-title">年度星光贡献图</h2>
           <p className="ts-heatmap-subtitle">
-            {activeYear} 年 · <span className="ts-tabular">{yearConversations}</span> 次对话 ·{' '}
+            {activeYear} 年 · <span className="ts-tabular">{yearConversations}</span> 次对话
+            {yearRequests > yearConversations && (
+              <>
+                {' · '}
+                <span className="ts-tabular">{yearRequests}</span> 次请求
+              </>
+            )}
+            {' · '}
             <span className="ts-tabular">{activeDaysInYear}</span> 活跃天 ·{' '}
             <span className="ts-tabular">{formatTokenCount(yearTokens)}</span> Tokens
           </p>
@@ -161,14 +180,11 @@ export function StarHeatmap({
         {hoveredCell ? (
           <div className="ts-heatmap-tooltip" role="tooltip">
             <span className={`ts-heatmap-dot level-${hoveredCell.level}`} aria-hidden="true" />
-            <span>
-              {hoveredCell.date} · {hoveredCell.count} 次对话 ·{' '}
-              {formatTokenCount(hoveredCell.tokens)} Tokens
-            </span>
+            <span>{formatCellSummary(hoveredCell)}</span>
           </div>
         ) : (
           <div className="ts-heatmap-hint">
-            悬停格子查看当日消耗，点击任意日期可联动筛选下方列表与高亮星空。
+            悬停格子查看当日实际请求消耗，点击任意日期可联动筛选下方列表与高亮星空。
           </div>
         )}
       </div>
@@ -218,7 +234,7 @@ export function StarHeatmap({
                       );
                     }
                     const isSelected = selectedDate === cell.date;
-                    const label = `${cell.date} · ${cell.count} 次对话 · ${formatTokenCount(cell.tokens)} Tokens`;
+                    const label = formatCellSummary(cell);
                     return (
                       <button
                         key={cell.date}
