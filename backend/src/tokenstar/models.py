@@ -27,7 +27,12 @@ class SubagentSummary(BaseModel):
     id: str
     role: str = ""
     type_name: str = ""
+    parent_session_id: str | None = None
+    parent_request_id: str | None = None
     primary_model: str = "unknown"
+    request_count: int = 0
+    started_at: str = ""
+    ended_at: str = ""
     input_tokens: int = 0
     cache_read_tokens: int = 0
     output_tokens: int = 0
@@ -57,6 +62,8 @@ class RequestStar(BaseModel):
     status: str = "DONE"
     is_subagent: bool = False
     subagent_role: str = ""
+    parent_session_id: str | None = None
+    parent_request_id: str | None = None
     celestial_type: CelestialType
     celestial_reason: str
 

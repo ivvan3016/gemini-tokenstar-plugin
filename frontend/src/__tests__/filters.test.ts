@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ConversationStar, RequestStar, StarFilterState } from '../types/sky';
-import { filterConversations, filterStarNodes, getDisplayTitle } from '../logic/filters';
-import { computeStarPositions } from '../logic/starLayout';
+import {
+  filterConversations,
+  filterStarNodes,
+  getDisplayTitle,
+  getMatchingClusterIds,
+} from '../logic/filters';
+import { buildSubagentClusters, computeStarPositions } from '../logic/starLayout';
 
 function makeStar(overrides: Partial<ConversationStar> = {}): ConversationStar {
   return {
@@ -195,5 +200,109 @@ describe('filters', () => {
     const nodes = computeStarPositions([conv], 'total');
     expect(filterStarNodes(nodes, { ...base, date: '2026-06-15' }, false).map((n) => n.id)).toEqual(['m1:0']);
     expect(filterStarNodes(nodes, { ...base, date: '2026-06-18' }, false).map((n) => n.id)).toEqual(['m1:1']);
+  });
+
+  it('resolves matching subagent cluster IDs accurately via getMatchingClusterIds', () => {
+    const mainReq: RequestStar = {
+      id: 'c-sub:0',
+      conversation_id: 'c-sub',
+      session_id: 'c-sub',
+      step_index: 0,
+      turn_index: 1,
+      created_at: '2026-06-20T10:00:00Z',
+      local_date: '2026-06-20',
+      model: 'gemini-2.5-pro',
+      input_tokens: 1000,
+      cache_read_tokens: 0,
+      output_tokens: 500,
+      total_tokens: 1500,
+      non_cache_tokens: 1500,
+      tool_calls_count: 1,
+      subagent_calls_count: 2,
+      status: 'COMPLETED',
+      is_subagent: false,
+      subagent_role: '',
+      celestial_type: 'binary',
+      celestial_reason: '派发子代理',
+    };
+    const subA1: RequestStar = {
+      ...mainReq,
+      id: 'sub-a:0',
+      session_id: 'sub-a',
+      step_index: 0,
+      created_at: '2026-06-20T10:01:00Z',
+      model: 'gemini-2.5-flash',
+      is_subagent: true,
+      subagent_role: 'explorer',
+      parent_session_id: 'c-sub',
+      parent_request_id: 'c-sub:0',
+      celestial_type: 'star',
+      celestial_reason: '子代理请求',
+    };
+    const subA2: RequestStar = {
+      ...subA1,
+      id: 'sub-a:1',
+      step_index: 1,
+      created_at: '2026-06-20T10:02:00Z',
+      celestial_type: 'pulsar',
+    };
+    const subB1: RequestStar = {
+      ...mainReq,
+      id: 'sub-b:0',
+      session_id: 'sub-b',
+      step_index: 0,
+      created_at: '2026-06-20T10:03:00Z',
+      model: 'claude-opus-4',
+      is_subagent: true,
+      subagent_role: 'reviewer',
+      parent_session_id: 'c-sub',
+      parent_request_id: 'c-sub:0',
+      celestial_type: 'black_hole',
+      celestial_reason: '子代理异常',
+    };
+
+    const conv = makeStar({
+      id: 'c-sub',
+      title: 'Subagent Filter Test',
+      local_date: '2026-06-20',
+      requests: [mainReq, subA1, subA2, subB1],
+    });
+    const nodes = computeStarPositions([conv], 'total');
+    const clusters = buildSubagentClusters(nodes, 'total');
+    expect(clusters).toHaveLength(2);
+
+    // Null matchingIds returns an empty set (no active filter)
+    expect(getMatchingClusterIds(clusters, null).size).toBe(0);
+    expect(getMatchingClusterIds(clusters, new Set()).size).toBe(0);
+
+    const base: StarFilterState = {
+      query: '',
+      models: [],
+      celestialTypes: [],
+      date: null,
+    };
+
+    // Matching only a main request returns no subagent clusters
+    const mainMatches = filterStarNodes(nodes, { ...base, models: ['gemini-2.5-pro'] }, false);
+    expect(
+      getMatchingClusterIds(clusters, new Set(mainMatches.map((n) => n.id))),
+    ).toEqual(new Set());
+
+    // Matching a single step inside sub-a highlights sub-a cluster without pulling sub-b
+    const pulsarMatches = filterStarNodes(nodes, { ...base, celestialTypes: ['pulsar'] }, false);
+    expect(
+      getMatchingClusterIds(clusters, new Set(pulsarMatches.map((n) => n.id))),
+    ).toEqual(new Set(['subcluster:c-sub:sub-a']));
+
+    // Role search in privacyMode still matches the right subagent cluster
+    const roleMatches = filterStarNodes(nodes, { ...base, query: 'reviewer' }, true);
+    expect(
+      getMatchingClusterIds(clusters, new Set(roleMatches.map((n) => n.id))),
+    ).toEqual(new Set(['subcluster:c-sub:sub-b']));
+
+    // Matching multiple clusters resolves all matching cluster IDs
+    expect(
+      getMatchingClusterIds(clusters, new Set(['sub-a:0', 'sub-b:0'])),
+    ).toEqual(new Set(['subcluster:c-sub:sub-a', 'subcluster:c-sub:sub-b']));
   });
 });

@@ -39,6 +39,8 @@ export interface WebGLFrameParams {
   height: number;
   dpr: number;
   camera: CameraLike;
+  /** Default-fit reference zoom used to compute deep zoom-out contrast compression. */
+  referenceZoom?: number;
   timeSec: number;
   stars: RenderableStar[];
   nebulae?: RenderableNebula[];
@@ -353,6 +355,7 @@ const BODY_FS = `${PRECISION_HEADER}
 uniform float u_pass;
 uniform float u_time;
 uniform float u_intro;
+uniform float u_deepOut;
 
 varying vec2 v_local;
 varying vec4 v_geom;   // halfExtent, sr, magnitude, seed
@@ -386,17 +389,27 @@ vec4 evalPsfStar(vec2 p, float sr, float mag, float seed, vec3 col, float alpha,
   float lum2 = lum * lum;
   float lumBoost = clamp(lum + emp * 0.35, 0.0, 1.25);
 
-  float moffat = pow(1.0 + (r * r) / max(0.28, sr * sr * 0.25), -2.55);
-  float moffatCore = moffat * (0.34 + 0.92 * lumBoost);
-  float corona = exp(-r / max(0.80, sr * (0.85 + 0.55 * lum))) * (0.10 + 0.58 * lum2 + emp * 0.18);
-  float halo = exp(-r / max(1.6, sr * (2.2 + 1.5 * lum))) * (0.03 + 0.32 * lum2 + emp * 0.16);
+  float deep = clamp(u_deepOut, 0.0, 1.0);
+  float coreSr = sr * mix(1.0, 0.74, deep);
+  float moffatExp = mix(-2.55, -3.50, deep);
+  float coronaDecay = sr * (0.85 + 0.55 * lum) * mix(1.0, 0.48, deep);
+  float coronaGate = mix(1.0, 0.14, deep);
+  float haloGate = mix(1.0, 0.03, deep);
+  float spikeGate = mix(1.0, 0.14, deep);
+  float magSep = mix(1.0, 0.24 + 0.80 * pow(lum, 1.55), deep);
+
+  float haloVis = mix(haloGate, 1.0, emp * 0.75);
+  float moffat = pow(1.0 + (r * r) / max(0.18, coreSr * coreSr * 0.25), moffatExp);
+  float moffatCore = moffat * (0.34 + 0.92 * lumBoost) * magSep;
+  float corona = exp(-r / max(0.60, coronaDecay)) * (0.10 + 0.58 * lum2 + emp * 0.18) * mix(coronaGate, 1.0, emp * 0.7);
+  float halo = exp(-r / max(1.4, sr * (2.2 + 1.5 * lum))) * (0.03 + 0.32 * lum2 + emp * 0.16) * haloVis;
 
   // Dynamic coronal micro-flare lobes on luminous giants
   float flare = 0.0;
   if (mag >= 0.62 || emp > 0.5) {
     float l = 0.5 + 0.5 * sin(ang * 3.0 + u_time * 1.4 + seed * 21.0);
     float lobe = l * l;
-    flare = gaussBand(r, sr * 1.75, max(0.7, sr * 0.65)) * lobe * (0.16 + 0.14 * lum2);
+    flare = gaussBand(r, sr * 1.75, max(0.7, sr * 0.65)) * lobe * (0.16 + 0.14 * lum2) * haloVis;
   }
 
   // Preserve vivid blackbody hues while letting luminous cores burn white-hot
@@ -441,10 +454,12 @@ vec4 evalPsfStar(vec2 p, float sr, float mag, float seed, vec3 col, float alpha,
     ghost = gaussBand(r, sr * 3.6, max(0.8, sr * 0.42)) * 0.07;
   }
 
+  float spikeVis = mix(spikeGate, 1.0, emp * 0.8);
   float intensity = (moffatCore + corona + halo + flare) * twinkle;
-  float spikeI = spikes * twinkle;
+  float spikeI = spikes * twinkle * spikeVis;
+  streak *= spikeVis;
   float total = intensity + spikeI + streak + ghost;
-  float whiteHot = clamp(moffatCore * (0.28 + 0.68 * lumBoost), 0.0, 0.92);
+  float whiteHot = clamp(moffatCore * (0.28 + 0.68 * lumBoost) * mix(1.0, 0.32 + 0.68 * lum2, deep), 0.0, 0.92);
   vec3 coreMix = mix(vividCol, vec3(1.0), whiteHot);
   vec3 ghostCol = mix(vec3(0.55, 0.85, 1.0), vec3(1.0, 0.72, 0.55), 0.5 + 0.5 * sin(ang + r * 0.2));
   vec3 rgb = coreMix * (moffatCore * twinkle)
@@ -484,6 +499,7 @@ void main() {
   }
 
   vec4 outCol = vec4(0.0);
+  float wideFade = mix(1.0, 0.38, clamp(u_deepOut, 0.0, 1.0));
 
   if (typeId < 0.5) {
     // 0 · Star
@@ -539,7 +555,7 @@ void main() {
 
     float diskLum = (diskRadial * swirl + knot + spiral) * beam * behindMask * 0.9;
     float iscoLum = isco * beam * behindMask;
-    float outerAura = exp(-r / max(2.2, bhR * 2.1)) * smoothstep(bhR * 0.92, bhR * 1.25, r) * 0.22;
+    float outerAura = exp(-r / max(2.2, bhR * 2.1)) * smoothstep(bhR * 0.92, bhR * 1.25, r) * 0.22 * wideFade;
 
     vec3 cTotal = vec3(1.0, 0.91, 0.78) * photonRing
       + mix(vec3(1.0, 0.86, 0.66), diskTint, 0.5) * lensArc
@@ -577,7 +593,7 @@ void main() {
     float rocheStream = gaussBand(across, bend, max(0.65, sr * 0.28))
       * sin(along * 3.14159) * streamFlow * 0.45 * alpha;
 
-    float tidal = exp(-length(v_local) / max(2.2, sep * 1.7)) * 0.20 * alpha;
+    float tidal = exp(-length(v_local) / max(2.2, sep * 1.7)) * 0.20 * alpha * wideFade;
     vec3 streamCol = mix(v_color, compCol, along);
 
     vec3 rgb = sA.rgb * sA.a + sB.rgb * sB.a + streamCol * (rocheStream + tidal);
@@ -601,8 +617,8 @@ void main() {
 
     vec2 nA = sp + vec2(sr * 0.65, sr * 0.4);
     vec2 nB = sp - vec2(sr * 0.55, sr * 0.48);
-    float wisp1 = exp(-length(vec2(nA.x, nA.y * 1.35)) / max(2.2, sr * 2.8)) * 0.17;
-    float wisp2 = exp(-length(vec2(nB.x * 1.3, nB.y)) / max(1.9, sr * 2.4)) * 0.13;
+    float wisp1 = exp(-length(vec2(nA.x, nA.y * 1.35)) / max(2.2, sr * 2.8)) * 0.17 * wideFade;
+    float wisp2 = exp(-length(vec2(nB.x * 1.3, nB.y)) / max(1.9, sr * 2.4)) * 0.13 * wideFade;
 
     // Precessing collimated relativistic beams with per-pole line-of-sight Doppler beaming
     float jetReach = sr * (8.5 + emp * 2.2) + 8.0;
@@ -621,13 +637,13 @@ void main() {
     float qCore = ay / coneHalfCore;
     float qOuter = ay / coneHalfOuter;
     float coreBeam = exp(-qCore * qCore) * axialFade * 0.88 * beamBoost * (0.86 + 0.26 * flashPeak);
-    float sheathBeam = exp(-qOuter * qOuter) * axialFade * 0.36 * (0.76 + 0.34 * beamBoost);
+    float sheathBeam = exp(-qOuter * qOuter) * axialFade * 0.36 * (0.76 + 0.34 * beamBoost) * wideFade;
 
     // Subtle spin-aligned Chandra-style equatorial wind torus with gentle azimuthal shimmer
     float eqD = length(vec2(sp.x * 2.6, sp.y));
     float spAng = safeAtan(vec2(sp.x * 2.6, sp.y));
     float torusShimmer = 0.82 + 0.18 * sin(spAng * 2.0 - rotPhase);
-    float torus = gaussBand(eqD, sr * 1.85, max(0.85, sr * 0.52)) * 0.13 * torusShimmer;
+    float torus = gaussBand(eqD, sr * 1.85, max(0.85, sr * 0.52)) * 0.13 * torusShimmer * wideFade;
 
     vec4 core = evalPsfStar(p, sr * 0.92, max(0.70, mag), seed, vec3(0.76, 0.95, 1.0), alpha * clamp(0.92 + 0.34 * flashPeak, 0.0, 1.25), emp, 1.0);
     vec3 wispCol = vec3(0.46, 0.88, 0.96) * (wisp1 + sheathBeam)
@@ -660,11 +676,11 @@ void main() {
     float dustStriation = 0.84 + 0.16 * sin(tx * 0.95 + tc.y * 1.7 - u_time * 1.8 + seed * 13.0);
     float dustTail = gaussBand(tc.y, curveOffset, max(0.85, dustSpread))
       * exp(-tx / max(4.0, dustLen * 0.45)) * smoothstep(dustLen, 0.0, tc.x)
-      * forward * dustStriation * 0.54;
+      * forward * dustStriation * 0.54 * wideFade;
 
     float r = length(v_local);
     float comaBreath = 0.90 + 0.10 * sin(u_time * 2.6 + seed * 15.0);
-    float coma = exp(-r / max(1.1, sr * 1.55)) * comaBreath * 0.58;
+    float coma = exp(-r / max(1.1, sr * 1.55)) * comaBreath * 0.58 * wideFade;
     float sunwardBias = smoothstep(0.3, -sr * 1.1, tc.x);
     float bowShock = gaussBand(r, sr * 1.35, max(0.5, sr * 0.28)) * sunwardBias * 0.42;
     float nucleus = exp(-r * r / max(0.35, sr * sr * 0.40)) * 1.05;
@@ -698,7 +714,7 @@ void main() {
 
   outCol.a *= edgeFade;
   if (outCol.a < 0.003) discard;
-  gl_FragColor = outCol;
+  gl_FragColor = vec4(outCol.rgb * outCol.a, outCol.a);
 }
 `;
 
@@ -917,6 +933,18 @@ function linkProgram(gl: WebGLRenderingContext, vsSrc: string, fsSrc: string, la
   return program;
 }
 
+function smoothstep01(t: number): number {
+  const x = Math.min(1, Math.max(0, t));
+  return x * x * (3 - 2 * x);
+}
+
+/** Compute normalized deep-zoom-out factor (0 at default/zoom-in, rising smoothly to 1 far below referenceZoom). */
+export function computeDeepOut(zoom: number, referenceZoom: number): number {
+  const refZoom = Math.max(0.10, referenceZoom);
+  const relZoom = zoom / refZoom;
+  return 1 - smoothstep01((relZoom - 0.24) / 0.72);
+}
+
 export function hexToRgbNorm(hex: string): [number, number, number] {
   const clean = hex.trim().replace('#', '');
   if (clean.length === 3) {
@@ -1079,6 +1107,7 @@ export class WebGLSkyRenderer {
     pass: WebGLUniformLocation | null;
     time: WebGLUniformLocation | null;
     intro: WebGLUniformLocation | null;
+    deepOut: WebGLUniformLocation | null;
   };
   private readonly meteorLoc: {
     pos: number;
@@ -1177,6 +1206,7 @@ export class WebGLSkyRenderer {
       pass: gl.getUniformLocation(bodyProg, 'u_pass'),
       time: gl.getUniformLocation(bodyProg, 'u_time'),
       intro: gl.getUniformLocation(bodyProg, 'u_intro'),
+      deepOut: gl.getUniformLocation(bodyProg, 'u_deepOut'),
     };
     this.meteorLoc = {
       pos: gl.getAttribLocation(meteorProg, 'a_pos'),
@@ -1294,6 +1324,8 @@ export class WebGLSkyRenderer {
     const { width, height, dpr, camera, timeSec, stars } = frame;
     if (width <= 0 || height <= 0) return;
 
+    const deepOut = computeDeepOut(camera.zoom, frame.referenceZoom ?? camera.zoom);
+
     if (this.introStartSec === null) this.introStartSec = timeSec;
     const intro =
       typeof frame.intro === 'number'
@@ -1351,6 +1383,7 @@ export class WebGLSkyRenderer {
       }
       let nebCursor = 0;
       let visibleNebVerts = 0;
+      const nebZoomFade = 1.0 - 0.56 * deepOut;
       for (let i = 0; i < nebulae.length; i += 1) {
         const neb = nebulae[i];
         const sx = (neb.wx - camera.x) * camera.zoom + width * 0.5;
@@ -1369,7 +1402,7 @@ export class WebGLSkyRenderer {
           this.nebulaFloatData[nebCursor + 5] = neb.r;
           this.nebulaFloatData[nebCursor + 6] = neb.g;
           this.nebulaFloatData[nebCursor + 7] = neb.b;
-          this.nebulaFloatData[nebCursor + 8] = neb.intensity;
+          this.nebulaFloatData[nebCursor + 8] = neb.intensity * nebZoomFade;
           this.nebulaFloatData[nebCursor + 9] = neb.seed;
           nebCursor += FLOATS_PER_NEBULA_VERTEX;
         }
@@ -1458,6 +1491,7 @@ export class WebGLSkyRenderer {
       gl.uniform3f(this.bodyLoc.camera, camera.x, camera.y, camera.zoom);
       gl.uniform1f(this.bodyLoc.time, timeSec);
       gl.uniform1f(this.bodyLoc.intro, intro);
+      gl.uniform1f(this.bodyLoc.deepOut, deepOut);
 
       gl.bindBuffer(gl.ARRAY_BUFFER, this.bodyVbo);
       gl.bufferData(gl.ARRAY_BUFFER, this.bodyFloatData.subarray(0, cursor), gl.DYNAMIC_DRAW);
@@ -1487,7 +1521,7 @@ export class WebGLSkyRenderer {
         gl.drawArrays(gl.TRIANGLES, 0, totalVerts);
       }
 
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_COLOR);
       gl.uniform1f(this.bodyLoc.pass, 1.0);
       gl.drawArrays(gl.TRIANGLES, 0, totalVerts);
     }
@@ -1651,6 +1685,7 @@ export function renderWebGLSnapshot(
   camera: CameraLike,
   timeSec: number,
   showNebulae = true,
+  referenceZoom = camera.zoom,
 ): HTMLCanvasElement | null {
   if (typeof document === 'undefined') return null;
   const glCanvas = document.createElement('canvas');
@@ -1660,7 +1695,7 @@ export function renderWebGLSnapshot(
   const renderer = WebGLSkyRenderer.create(glCanvas);
   if (!renderer) return null;
 
-  const visualScale = Math.min(2.2, Math.max(0.55, Math.pow(Math.max(0.14, camera.zoom), 0.52)));
+  const visualScale = Math.min(2.25, Math.max(0.38, Math.pow(Math.max(0.08, camera.zoom), 0.53)));
   const renderStars: RenderableStar[] = [];
   for (const node of nodes) {
     const sx = (node.x - camera.x) * camera.zoom + width * 0.5;
@@ -1693,6 +1728,7 @@ export function renderWebGLSnapshot(
     height,
     dpr: 2,
     camera,
+    referenceZoom,
     timeSec,
     stars: renderStars,
     nebulae: showNebulae ? buildClusterNebulae(nodes) : [],

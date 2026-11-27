@@ -1187,4 +1187,152 @@ describe('TopBar, StarHeatmap, UsageTables, StatsTab & App Integration', () => {
     expect(container.textContent).toContain('git pull');
     expect(findButtonByText(container, '查看 GitHub Release')).toBeDefined();
   });
+
+  it('auto-expands child subagent cluster when jumping from StatsTab 按请求明细 to a subagent request', async () => {
+    const convWithSub = makeStar({
+      id: 'sub-jump-conv',
+      title: 'Parent Subagent Orbit',
+      started_at: '2026-06-15T09:00:00Z',
+      ended_at: '2026-06-15T09:05:00Z',
+      local_date: '2026-06-15',
+      subagent_calls_count: 1,
+      celestial_type: 'binary',
+      requests: [
+        {
+          id: 'sub-jump-conv:0',
+          conversation_id: 'sub-jump-conv',
+          session_id: 'sub-jump-conv',
+          step_index: 0,
+          turn_index: 1,
+          created_at: '2026-06-15T09:00:00Z',
+          local_date: '2026-06-15',
+          model: 'gemini-2.5-pro',
+          input_tokens: 1000,
+          cache_read_tokens: 2000,
+          output_tokens: 400,
+          total_tokens: 3400,
+          non_cache_tokens: 1400,
+          tool_calls_count: 1,
+          subagent_calls_count: 1,
+          status: 'COMPLETED',
+          is_subagent: false,
+          subagent_role: '',
+          celestial_type: 'binary',
+          celestial_reason: '派发子代理',
+        },
+        {
+          id: 'sub-child:0',
+          conversation_id: 'sub-jump-conv',
+          session_id: 'sub-child',
+          step_index: 0,
+          turn_index: 1,
+          created_at: '2026-06-15T09:01:00Z',
+          local_date: '2026-06-15',
+          model: 'gemini-2.5-flash',
+          input_tokens: 500,
+          cache_read_tokens: 1000,
+          output_tokens: 200,
+          total_tokens: 1700,
+          non_cache_tokens: 700,
+          tool_calls_count: 2,
+          subagent_calls_count: 0,
+          status: 'COMPLETED',
+          is_subagent: true,
+          subagent_role: 'researcher',
+          parent_session_id: 'sub-jump-conv',
+          parent_request_id: 'sub-jump-conv:0',
+          celestial_type: 'pulsar',
+          celestial_reason: '子代理高频检索',
+        },
+        {
+          id: 'sub-child:1',
+          conversation_id: 'sub-jump-conv',
+          session_id: 'sub-child',
+          step_index: 1,
+          turn_index: 1,
+          created_at: '2026-06-15T09:02:00Z',
+          local_date: '2026-06-15',
+          model: 'gemini-2.5-flash',
+          input_tokens: 600,
+          cache_read_tokens: 1200,
+          output_tokens: 300,
+          total_tokens: 2100,
+          non_cache_tokens: 900,
+          tool_calls_count: 3,
+          subagent_calls_count: 0,
+          status: 'COMPLETED',
+          is_subagent: true,
+          subagent_role: 'researcher',
+          parent_session_id: 'sub-jump-conv',
+          parent_request_id: 'sub-jump-conv:0',
+          celestial_type: 'star',
+          celestial_reason: '子代理汇总结论',
+        },
+      ],
+      subagents: [
+        {
+          id: 'sub-child',
+          role: 'researcher',
+          type_name: 'search',
+          primary_model: 'gemini-2.5-flash',
+          input_tokens: 1100,
+          cache_read_tokens: 2200,
+          output_tokens: 500,
+          total_tokens: 3800,
+          non_cache_tokens: 1600,
+          last_status: 'COMPLETED',
+          parent_session_id: 'sub-jump-conv',
+          parent_request_id: 'sub-jump-conv:0',
+          request_count: 2,
+        },
+      ],
+    });
+
+    const transport: DataTransport = {
+      mode: 'http',
+      getSkyData: vi.fn().mockResolvedValue(makeSkyResponse([convWithSub])),
+      refresh: vi.fn().mockResolvedValue(makeSkyResponse([convWithSub])),
+      dispose: vi.fn(),
+    };
+
+    await act(async () => {
+      root.render(<App transportFactory={vi.fn().mockResolvedValue(transport)} pollIntervalMs={0} />);
+    });
+
+    // Switch to StatsTab -> 按请求明细 (3)
+    act(() => {
+      findButtonByText(container, '◈ 统计')?.click();
+    });
+    const reqTabBtn = findButtonByText(container, '按请求明细 (3)');
+    expect(reqTabBtn).toBeDefined();
+    act(() => {
+      reqTabBtn!.click();
+    });
+
+    const childRow = container.querySelector('tbody tr[data-request-id="sub-child:1"]');
+    expect(childRow).not.toBeNull();
+    const locateChildBtn = childRow!.querySelector('button') as HTMLButtonElement | null;
+    expect(locateChildBtn).not.toBeNull();
+
+    // Jump to child subagent star in SkyTab
+    act(() => {
+      locateChildBtn!.click();
+    });
+
+    // SkyTab opens DetailDrawer on child request, auto-expands cluster, and shows 收起为伴星团 + 收起星团
+    expect(container.textContent).toContain('Parent Subagent Orbit');
+    expect(container.textContent).toContain('第 3 / 3 次请求');
+    expect(container.textContent).toContain('researcher');
+    const collapseBtn = findButtonByText(container, '收起为伴星团');
+    expect(collapseBtn).toBeDefined();
+    expect(findButtonByText(container, '收起星团')).toBeDefined();
+
+    // Clicking 收起为伴星团 collapses the cluster and returns selection to parent request node
+    act(() => {
+      collapseBtn!.click();
+    });
+    expect(container.textContent).toContain('第 1 / 3 次请求');
+    expect(findButtonByText(container, '收起为伴星团')).toBeUndefined();
+    expect(findButtonByText(container, '展开轨迹')).toBeDefined();
+  });
 });

@@ -17,6 +17,8 @@ class SubagentLink:
     child_id: str
     role: str = ""
     type_name: str = ""
+    spawn_step_index: int | None = None
+    spawn_request_id: str | None = None
 
 
 @dataclass(slots=True)

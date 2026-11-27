@@ -1,6 +1,6 @@
 import type { ConversationStar, StarFilterState } from '../types/sky';
 import { getEffectiveRequests, starHasActivityOnDate } from './metrics';
-import type { StarNode } from './starLayout';
+import type { StarNode, SubagentCluster } from './starLayout';
 
 /**
  * Format conversation title while masking sensitive names in privacy mode.
@@ -111,4 +111,27 @@ export function filterStarNodes(
 
     return true;
   });
+}
+
+/**
+ * Resolve subagent cluster IDs that contain at least one matched StarNode ID.
+ * Returns an empty set when `matchingIds` is `null` (callers should treat
+ * `null` as "no active filter" before calling this helper).
+ */
+export function getMatchingClusterIds(
+  clusters: SubagentCluster[],
+  matchingIds: Set<string> | null,
+): Set<string> {
+  const matched = new Set<string>();
+  if (matchingIds === null || matchingIds.size === 0) {
+    return matched;
+  }
+
+  for (const cluster of clusters) {
+    if (cluster.memberIds.some((memberId) => matchingIds.has(memberId))) {
+      matched.add(cluster.id);
+    }
+  }
+
+  return matched;
 }

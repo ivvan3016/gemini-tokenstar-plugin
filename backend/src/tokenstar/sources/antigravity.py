@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Literal
@@ -40,10 +41,16 @@ def sanitize_title(raw_content: str, conv_id: str) -> str:
     return f"对话 {conv_id[:8]}"
 
 
-def _safe_int(value: Any) -> int:
+def _optional_int(value: Any) -> int | None:
+    """Return `value` when it is a strict integer (excluding booleans), else None."""
     if isinstance(value, bool) or not isinstance(value, int):
-        return 0
+        return None
     return value
+
+
+def _safe_int(value: Any) -> int:
+    parsed = _optional_int(value)
+    return parsed if parsed is not None else 0
 
 
 def _parse_iso_timestamp(value: Any) -> datetime | None:
@@ -77,14 +84,50 @@ def _iter_json_dicts(payload: Any):
             yield from _iter_json_dicts(item)
 
 
+def _extract_conversation_ids_from_text(text: str) -> list[str]:
+    """Extract unique conversation IDs from JSON payloads or regex matches."""
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add_id(value: Any) -> None:
+        if not isinstance(value, str):
+            return
+        cid = value.strip()
+        if cid and cid not in seen:
+            seen.add(cid)
+            found.append(cid)
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+
+    if parsed is not None:
+        for node in _iter_json_dicts(parsed):
+            add_id(node.get("conversationId"))
+            add_id(node.get("conversation_id"))
+
+    for match in _CONVERSATION_ID_RE.findall(text):
+        add_id(match)
+
+    return found
+
+
 def extract_subagent_links(
-    conv_dir: Path, tool_outputs: list[str]
+    conv_dir: Path,
+    tool_outputs: list[str],
+    generic_child_steps: list[tuple[int, str]] | None = None,
 ) -> list[SubagentLink]:
-    """Discover child subagent links from subagents/, messages/, and tool outputs."""
+    """Discover child subagent links from subagents/, messages/, tool outputs, and GENERIC steps."""
     self_id = conv_dir.name
     links_by_id: dict[str, SubagentLink] = {}
 
-    def record(child_id: Any, role: Any = "", type_name: Any = "") -> None:
+    def record(
+        child_id: Any,
+        role: Any = "",
+        type_name: Any = "",
+        spawn_step_index: Any = None,
+    ) -> None:
         if not isinstance(child_id, str):
             return
         cid = child_id.strip()
@@ -92,17 +135,35 @@ def extract_subagent_links(
             return
         role_str = role.strip() if isinstance(role, str) else ""
         type_str = type_name.strip() if isinstance(type_name, str) else ""
+        step_idx = _optional_int(spawn_step_index)
         existing = links_by_id.get(cid)
         if existing is None:
             links_by_id[cid] = SubagentLink(
-                child_id=cid, role=role_str, type_name=type_str
-            )
-        elif (not existing.role and role_str) or (not existing.type_name and type_str):
-            links_by_id[cid] = SubagentLink(
                 child_id=cid,
-                role=existing.role or role_str,
-                type_name=existing.type_name or type_str,
+                role=role_str,
+                type_name=type_str,
+                spawn_step_index=step_idx,
             )
+        else:
+            new_role = existing.role or role_str
+            new_type = existing.type_name or type_str
+            new_step = (
+                existing.spawn_step_index
+                if existing.spawn_step_index is not None
+                else step_idx
+            )
+            if (
+                new_role != existing.role
+                or new_type != existing.type_name
+                or new_step != existing.spawn_step_index
+            ):
+                links_by_id[cid] = SubagentLink(
+                    child_id=cid,
+                    role=new_role,
+                    type_name=new_type,
+                    spawn_step_index=new_step,
+                    spawn_request_id=existing.spawn_request_id,
+                )
 
     # 1. Primary source: .system_generated/subagents/*.json
     subagents_dir = conv_dir / ".system_generated" / "subagents"
@@ -117,6 +178,7 @@ def extract_subagent_links(
                         data.get("conversationId"),
                         desc.get("role", ""),
                         desc.get("typeName", ""),
+                        data.get("spawnStepIndex"),
                     )
     except OSError:
         pass
@@ -168,7 +230,32 @@ def extract_subagent_links(
         for match in _CONVERSATION_ID_RE.findall(raw_output):
             record(match)
 
+    # 4. Fallback: GENERIC transcript steps referencing child conversation IDs
+    if generic_child_steps:
+        for step_idx, cid in generic_child_steps:
+            record(cid, spawn_step_index=step_idx)
+
     return list(links_by_id.values())
+
+
+def _find_spawn_request(
+    raw_requests: list[RawRequestRecord], spawn_step_index: int
+) -> RawRequestRecord | None:
+    """Find latest request at or before `spawn_step_index`, preferring subagent calls."""
+    eligible = [
+        (idx, req)
+        for idx, req in enumerate(raw_requests)
+        if req.step_index <= spawn_step_index
+    ]
+    if not eligible:
+        return None
+
+    subagent_eligible = [
+        (idx, req) for idx, req in eligible if req.subagent_calls_count >= 1
+    ]
+    pool = subagent_eligible or eligible
+    _, matched = max(pool, key=lambda item: (item[1].step_index, item[0]))
+    return matched
 
 
 def _collect_tool_output_strings(tool_call: dict[str, Any], out: list[str]) -> None:
@@ -218,6 +305,7 @@ def parse_antigravity_dir(
     error_steps_count = 0
     last_status = "UNKNOWN"
     tool_outputs: list[str] = []
+    generic_child_steps: list[tuple[int, str]] = []
     raw_requests: list[RawRequestRecord] = []
     seen_request_ids: dict[str, int] = {}
 
@@ -273,11 +361,21 @@ def parse_antigravity_dir(
                 bucket.steps += 1
 
         entry_type = entry.get("type")
+        parsed_step_idx = _optional_int(entry.get("step_index"))
+        line_step_idx = parsed_step_idx if parsed_step_idx is not None else line_no
+
         if entry_type == "USER_INPUT":
             user_turns += 1
             if first_user_content is None:
                 raw_content = entry.get("content")
                 first_user_content = raw_content if isinstance(raw_content, str) else ""
+        elif entry_type == "GENERIC":
+            raw_content = entry.get("content")
+            if isinstance(raw_content, str) and (
+                "conversationId" in raw_content or "conversation_id" in raw_content
+            ):
+                for cid in _extract_conversation_ids_from_text(raw_content):
+                    generic_child_steps.append((line_step_idx, cid))
 
         if model_name or entry_type == "PLANNER_RESPONSE":
             model_steps_count += 1
@@ -313,13 +411,7 @@ def parse_antigravity_dir(
             or step_total > 0
         )
         if is_model_request:
-            raw_step_idx = entry.get("step_index")
-            step_idx = (
-                raw_step_idx
-                if isinstance(raw_step_idx, int)
-                and not isinstance(raw_step_idx, bool)
-                else line_no
-            )
+            step_idx = line_step_idx
             base_req_id = f"{conv_id}:{step_idx}"
             dup_count = seen_request_ids.get(base_req_id, 0)
             seen_request_ids[base_req_id] = dup_count + 1
@@ -386,7 +478,15 @@ def parse_antigravity_dir(
         else "unknown"
     )
     title = sanitize_title(first_user_content or "", conv_id)
-    subagent_links = extract_subagent_links(conv_dir, tool_outputs)
+    subagent_links = extract_subagent_links(conv_dir, tool_outputs, generic_child_steps)
+    resolved_links: list[SubagentLink] = []
+    for link in subagent_links:
+        if link.spawn_step_index is not None:
+            matched_req = _find_spawn_request(raw_requests, link.spawn_step_index)
+            if matched_req is not None:
+                link = replace(link, spawn_request_id=matched_req.id)
+        resolved_links.append(link)
+    subagent_links = resolved_links
     subagent_calls_count = max(tool_subagent_calls, len(subagent_links))
     total_tokens = input_tokens + cache_read_tokens + output_tokens
     non_cache_tokens = input_tokens + output_tokens

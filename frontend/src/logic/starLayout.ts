@@ -18,6 +18,39 @@ export interface StarNode {
   radius: number;
   color: string;
   effectiveTokens: number;
+  subagentClusterId?: string | null;
+  isCompanionMicroStar?: boolean;
+}
+
+export interface SubagentCluster {
+  id: string;
+  sessionId: string;
+  conversationId: string;
+  parentSessionId: string;
+  parentRequestId: string | null;
+  parentNodeId: string | null;
+  role: string;
+  typeName: string;
+  primaryModel: string;
+  requestCount: number;
+  effectiveTokens: number;
+  totalTokens: number;
+  nonCacheTokens: number;
+  startedAt: string;
+  endedAt: string;
+  localDate: string;
+  lastStatus: string;
+  anchorX: number;
+  anchorY: number;
+  outwardAngle: number;
+  clusterRadius: number;
+  magnitude: number;
+  color: string;
+  firstNodeIndex: number;
+  lastNodeIndex: number;
+  memberIds: string[];
+  memberNodes: StarNode[];
+  streamBounds: { minX: number; maxX: number; minY: number; maxY: number };
 }
 
 // Real Morgan-Keenan O-B-A-F-G-K-M stellar blackbody stops (30,000K O-blue to 3,100K M-crimson)
@@ -250,6 +283,265 @@ interface ClusterLayoutResult {
   boundRadius: number;
 }
 
+function splitMainAndSubIndices(
+  convId: string,
+  orderedReqs: RequestStar[],
+): { mainIndices: number[]; subIndices: number[] } {
+  const n = orderedReqs.length;
+  const hasNonSubagent = orderedReqs.some((req) => !req.is_subagent);
+  const mainIndices: number[] = [];
+  const subIndices: number[] = [];
+
+  if (hasNonSubagent) {
+    for (let i = 0; i < n; i += 1) {
+      if (orderedReqs[i].is_subagent) {
+        subIndices.push(i);
+      } else {
+        mainIndices.push(i);
+      }
+    }
+    return { mainIndices, subIndices };
+  }
+
+  for (let i = 0; i < n; i += 1) {
+    if (orderedReqs[i].session_id === convId) {
+      mainIndices.push(i);
+    } else {
+      subIndices.push(i);
+    }
+  }
+  if (mainIndices.length === 0) {
+    for (let i = 0; i < n; i += 1) {
+      mainIndices.push(i);
+    }
+    subIndices.length = 0;
+  }
+  return { mainIndices, subIndices };
+}
+
+function resolveSubagentParentIndex(
+  memberIndices: number[],
+  sessKey: string,
+  orderedReqs: RequestStar[],
+  mainIndices: number[],
+  reqIdToIndex: Map<string, number>,
+  sessionToIndices: Map<string, number[]>,
+): number {
+  const firstSubIdx = memberIndices[0];
+  const memberSet = new Set(memberIndices);
+
+  let parentRequestId: string | null = null;
+  let parentSessionId: string | null = null;
+  for (const idx of memberIndices) {
+    const req = orderedReqs[idx];
+    if (!parentRequestId && req.parent_request_id) {
+      parentRequestId = req.parent_request_id;
+    }
+    if (!parentSessionId && req.parent_session_id) {
+      parentSessionId = req.parent_session_id;
+    }
+    if (parentRequestId && parentSessionId) break;
+  }
+
+  if (parentRequestId) {
+    const matchedIdx = reqIdToIndex.get(parentRequestId);
+    if (matchedIdx !== undefined && !memberSet.has(matchedIdx)) {
+      return matchedIdx;
+    }
+  }
+
+  if (parentSessionId && parentSessionId !== sessKey) {
+    const sessionIndices = sessionToIndices.get(parentSessionId);
+    if (sessionIndices && sessionIndices.length > 0) {
+      let bestBefore = -1;
+      for (const idx of sessionIndices) {
+        if (idx < firstSubIdx) {
+          bestBefore = idx;
+        } else {
+          break;
+        }
+      }
+      return bestBefore !== -1 ? bestBefore : sessionIndices[0];
+    }
+  }
+
+  let fallbackIdx = mainIndices[0];
+  for (let m = 0; m < mainIndices.length; m += 1) {
+    if (mainIndices[m] < firstSubIdx) {
+      fallbackIdx = mainIndices[m];
+    } else {
+      break;
+    }
+  }
+  return fallbackIdx;
+}
+
+interface SubSessionLayoutGroup {
+  sessKey: string;
+  memberIndices: number[];
+  firstSubIdx: number;
+  parentIdx: number;
+}
+
+function layoutSubagentStreams(
+  convId: string,
+  orderedReqs: RequestStar[],
+  mainIndices: number[],
+  subIndices: number[],
+  offsets: Array<LocalOffset | undefined>,
+  rand: () => number,
+  cosR: number,
+  sinR: number,
+): void {
+  if (subIndices.length === 0) return;
+
+  let mainCentroidX = 0;
+  let mainCentroidY = 0;
+  for (const mIdx of mainIndices) {
+    const mOff = offsets[mIdx]!;
+    mainCentroidX += mOff.dx;
+    mainCentroidY += mOff.dy;
+  }
+  mainCentroidX /= mainIndices.length;
+  mainCentroidY /= mainIndices.length;
+
+  const reqIdToIndex = new Map<string, number>();
+  const sessionToIndices = new Map<string, number[]>();
+  for (let i = 0; i < orderedReqs.length; i += 1) {
+    const req = orderedReqs[i];
+    reqIdToIndex.set(req.id, i);
+    const sKey = req.session_id || req.id;
+    let bucket = sessionToIndices.get(sKey);
+    if (!bucket) {
+      bucket = [];
+      sessionToIndices.set(sKey, bucket);
+    }
+    bucket.push(i);
+  }
+
+  const subGroups = new Map<string, number[]>();
+  for (const idx of subIndices) {
+    const req = orderedReqs[idx];
+    const sessKey = req.session_id || req.id;
+    let group = subGroups.get(sessKey);
+    if (!group) {
+      group = [];
+      subGroups.set(sessKey, group);
+    }
+    group.push(idx);
+  }
+
+  let pending: SubSessionLayoutGroup[] = [];
+  for (const [sessKey, memberIndices] of subGroups.entries()) {
+    pending.push({
+      sessKey,
+      memberIndices,
+      firstSubIdx: memberIndices[0],
+      parentIdx: resolveSubagentParentIndex(
+        memberIndices,
+        sessKey,
+        orderedReqs,
+        mainIndices,
+        reqIdToIndex,
+        sessionToIndices,
+      ),
+    });
+  }
+
+  while (pending.length > 0) {
+    let ready = pending.filter((entry) => offsets[entry.parentIdx] !== undefined);
+    if (ready.length === 0) {
+      // Break any theoretical cyclic parent reference by anchoring the earliest pending session to main spine
+      const forced = pending[0];
+      let fallbackIdx = mainIndices[0];
+      for (const mIdx of mainIndices) {
+        if (mIdx < forced.firstSubIdx) fallbackIdx = mIdx;
+        else break;
+      }
+      forced.parentIdx = fallbackIdx;
+      ready = [forced];
+    }
+
+    const readySet = new Set(ready);
+    pending = pending.filter((entry) => !readySet.has(entry));
+
+    const byParent = new Map<number, SubSessionLayoutGroup[]>();
+    for (const entry of ready) {
+      let siblings = byParent.get(entry.parentIdx);
+      if (!siblings) {
+        siblings = [];
+        byParent.set(entry.parentIdx, siblings);
+      }
+      siblings.push(entry);
+    }
+
+    const parentKeys = Array.from(byParent.keys()).sort((a, b) => a - b);
+    for (const parentIdx of parentKeys) {
+      const siblings = byParent.get(parentIdx)!;
+      const anchor = offsets[parentIdx]!;
+      const outX = anchor.dx - mainCentroidX;
+      const outY = anchor.dy - mainCentroidY;
+      const outLen = Math.hypot(outX, outY);
+      const baseAngle =
+        outLen > 6
+          ? Math.atan2(outY, outX)
+          : Math.atan2(cosR, -sinR) + (rand() < 0.5 ? 0 : Math.PI) + (rand() - 0.5) * 0.6;
+
+      const totalSpread = Math.min(Math.PI * 0.9, (siblings.length - 1) * 0.48);
+
+      for (let sIdx = 0; sIdx < siblings.length; sIdx += 1) {
+        const sub = siblings[sIdx];
+        const frac = siblings.length > 1 ? sIdx / (siblings.length - 1) - 0.5 : 0;
+        const outwardAngle = baseAngle + frac * totalSpread;
+        const cosA = Math.cos(outwardAngle);
+        const sinA = Math.sin(outwardAngle);
+        const perpX = -sinA;
+        const perpY = cosA;
+
+        const m = sub.memberIndices.length;
+        const siblingScale = siblings.length > 4 ? clamp(4 / siblings.length, 0.5, 1) : 1;
+        const stepSpacing = 36 * siblingScale;
+        const estClusterR = m <= 1 ? 0 : Math.sqrt(m - 1) * stepSpacing + 18;
+        const satDist = Math.max(78, 62 + estClusterR * 0.92) + rand() * 14;
+        const centerX = anchor.dx + cosA * satDist;
+        const centerY = anchor.dy + sinA * satDist;
+
+        if (m === 1) {
+          offsets[sub.memberIndices[0]] = { dx: centerX, dy: centerY };
+          continue;
+        }
+
+        const goldenAngle = 2.399963229728653;
+        const spinDir = fnv1a32(`${convId}:${sub.sessKey}:spiral`) % 2 === 0 ? 1 : -1;
+        const basePhase = outwardAngle + Math.PI + (rand() - 0.5) * 0.45;
+        const aspect = 0.88 + rand() * 0.12;
+        const r0 = clamp(estClusterR * 0.38, 18, 42);
+
+        for (let k = 0; k < m; k += 1) {
+          const reqIdx = sub.memberIndices[k];
+          if (k === 0) {
+            offsets[reqIdx] = {
+              dx: centerX - cosA * r0,
+              dy: centerY - sinA * r0,
+            };
+            continue;
+          }
+          const radialFrac = Math.sqrt(k / Math.max(1, m - 1));
+          const r = radialFrac * estClusterR * (0.9 + rand() * 0.16);
+          const ang = basePhase + spinDir * k * goldenAngle + (rand() - 0.5) * 0.25;
+          const localAng = ang - outwardAngle;
+          const lx = Math.cos(localAng) * r;
+          const ly = Math.sin(localAng) * r * aspect;
+          offsets[reqIdx] = {
+            dx: centerX + cosA * lx + perpX * ly,
+            dy: centerY + sinA * lx + perpY * ly,
+          };
+        }
+      }
+    }
+  }
+}
+
 /**
  * Lay out requests inside one conversation with astronomical density variations
  * (filament arc, multi-pocket OB association, or core-halo open cluster) plus
@@ -276,27 +568,16 @@ function layoutConversationRequests(
   const cosR = Math.cos(clusterRot);
   const sinR = Math.sin(clusterRot);
 
-  const mainIndices: number[] = [];
-  const subIndices: number[] = [];
-  for (let i = 0; i < n; i += 1) {
-    if (orderedReqs[i].is_subagent && mainIndices.length > 0) {
-      subIndices.push(i);
-    } else {
-      mainIndices.push(i);
-    }
-  }
-  if (mainIndices.length === 0) {
-    for (let i = 0; i < n; i += 1) mainIndices.push(i);
-    subIndices.length = 0;
-  }
-
-  const offsets: LocalOffset[] = new Array(n);
+  const { mainIndices, subIndices } = splitMainAndSubIndices(convId, orderedReqs);
+  const rawOffsets: Array<LocalOffset | undefined> = new Array(n);
   const mainCount = mainIndices.length;
 
-  if (morphology === 0 || mainCount < 4) {
+  if (mainCount === 1) {
+    rawOffsets[mainIndices[0]] = { dx: 0, dy: 0 };
+  } else if (morphology === 0 || mainCount < 4) {
     // Morphology 0: Elongated astronomical filament / open airy arc
-    const lengthScale = 150 + Math.sqrt(mainCount) * 96;
-    const widthSpread = 62 + Math.sqrt(mainCount) * 30;
+    const lengthScale = 112 + Math.sqrt(mainCount) * 70;
+    const widthSpread = 46 + Math.sqrt(mainCount) * 22;
     const curveAmp = (rand() - 0.5) * widthSpread * 1.25;
     const rawT: number[] = [];
     let tCursor = 0;
@@ -309,11 +590,11 @@ function layoutConversationRequests(
     for (let k = 0; k < mainCount; k += 1) {
       const idx = mainIndices[k];
       const u = (rawT[k] / maxT - 0.5) * 2; // [-1, 1]
-      const lx = u * lengthScale * 0.55 + (rand() - 0.5) * 72;
+      const lx = u * lengthScale * 0.55 + (rand() - 0.5) * 52;
       const arcY = curveAmp * (u * u - 0.35);
       const scatterY = ((rand() + rand() - 1) * 0.68) * widthSpread;
       const ly = arcY + scatterY;
-      offsets[idx] = {
+      rawOffsets[idx] = {
         dx: lx * cosR - ly * sinR,
         dy: lx * sinR + ly * cosR,
       };
@@ -321,7 +602,7 @@ function layoutConversationRequests(
   } else if (morphology === 1) {
     // Morphology 1: Open multi-pocket OB association sweeping across dark star-forming pockets
     const pocketCount = clamp(Math.round(2 + rand() * 1.5 + mainCount / 22), 2, 5);
-    const associationSpan = 165 + Math.sqrt(mainCount) * 86;
+    const associationSpan = 122 + Math.sqrt(mainCount) * 64;
     const sweepSpan = (0.95 + rand() * 0.65) * Math.PI;
     const sweepDir = rand() < 0.5 ? 1 : -1;
     const startAng = rand() * Math.PI * 2;
@@ -351,18 +632,18 @@ function layoutConversationRequests(
       const driftX = dirLen > 1e-4 ? (dirX / dirLen) * localDrift : 0;
       const driftY = dirLen > 1e-4 ? (dirY / dirLen) * localDrift : 0;
 
-      const scatterR = isOutlier ? 105 + rand() * 95 : 28 + Math.pow(rand(), 1.35) * 76;
+      const scatterR = isOutlier ? 78 + rand() * 68 : 20 + Math.pow(rand(), 1.35) * 56;
       const ang = rand() * Math.PI * 2;
       const lx = pocket.dx + driftX + Math.cos(ang) * scatterR;
       const ly = pocket.dy + driftY + Math.sin(ang) * scatterR * (0.7 + rand() * 0.35);
-      offsets[idx] = {
+      rawOffsets[idx] = {
         dx: lx * cosR - ly * sinR,
         dy: lx * sinR + ly * cosR,
       };
     }
   } else {
     // Morphology 2: Open core-halo cluster with gentle sectoral/spiral progression
-    const clusterRadius = 150 + Math.sqrt(mainCount) * 88;
+    const clusterRadius = 112 + Math.sqrt(mainCount) * 66;
     const flattenY = 0.65 + rand() * 0.32;
     const spinDir = rand() < 0.5 ? 1 : -1;
     const startAng = rand() * Math.PI * 2;
@@ -372,69 +653,39 @@ function layoutConversationRequests(
       const frac = mainCount > 1 ? k / (mainCount - 1) : 0;
       const mag = magnitudes[idx] ?? 0.35;
       const radialBias = clamp(1.12 - mag * 0.45, 0.45, 1.15);
-      const r = (Math.pow(rand(), 1.55) * clusterRadius * radialBias + 32) * (0.82 + 0.3 * frac);
+      const r = (Math.pow(rand(), 1.55) * clusterRadius * radialBias + 26) * (0.82 + 0.3 * frac);
       const ang = startAng + spinDir * frac * totalSweep + (rand() - 0.5) * 1.15;
       const lx = Math.cos(ang) * r;
       const ly = Math.sin(ang) * r * flattenY;
-      offsets[idx] = {
+      rawOffsets[idx] = {
         dx: lx * cosR - ly * sinR,
         dy: lx * sinR + ly * cosR,
       };
     }
   }
 
-  // Place subagent sessions in open satellite sub-pockets off their preceding main-thread vertex
-  if (subIndices.length > 0) {
-    const subPocketState = new Map<
-      string,
-      { center: LocalOffset; outwardAng: number; stepCount: number }
-    >();
-    for (const idx of subIndices) {
-      const req = orderedReqs[idx];
-      const sessKey = req.session_id || req.id;
-      let state = subPocketState.get(sessKey);
-      if (!state) {
-        let anchorIdx = mainIndices[0];
-        for (let m = 0; m < mainIndices.length; m += 1) {
-          if (mainIndices[m] < idx) anchorIdx = mainIndices[m];
-          else break;
-        }
-        const anchor = offsets[anchorIdx] ?? { dx: 0, dy: 0 };
-        const outwardAng =
-          Math.hypot(anchor.dx, anchor.dy) > 6
-            ? Math.atan2(anchor.dy, anchor.dx) + (rand() - 0.5) * 1.1
-            : rand() * Math.PI * 2;
-        const satDist = 92 + rand() * 88;
-        state = {
-          center: {
-            dx: anchor.dx + Math.cos(outwardAng) * satDist,
-            dy: anchor.dy + Math.sin(outwardAng) * satDist,
-          },
-          outwardAng,
-          stepCount: 0,
-        };
-        subPocketState.set(sessKey, state);
-      }
-      const stepDrift = state.stepCount * (14 + rand() * 12);
-      state.stepCount += 1;
-      const jitterR = 26 + Math.pow(rand(), 1.2) * 54;
-      const jitterA = rand() * Math.PI * 2;
-      offsets[idx] = {
-        dx: state.center.dx + Math.cos(state.outwardAng) * stepDrift + Math.cos(jitterA) * jitterR,
-        dy: state.center.dy + Math.sin(state.outwardAng) * stepDrift + Math.sin(jitterA) * jitterR,
-      };
-    }
+  // Place each subagent session independently as a near-circular open globular companion cluster
+  layoutSubagentStreams(convId, orderedReqs, mainIndices, subIndices, rawOffsets, rand, cosR, sinR);
+
+  const offsets: LocalOffset[] = rawOffsets.map((o) => o ?? { dx: 0, dy: 0 });
+  const isMainNode = new Array<boolean>(n).fill(false);
+  for (const mIdx of mainIndices) {
+    isMainNode[mIdx] = true;
   }
 
   // Iterative pairwise minimum-distance relaxation inside the cluster (sparse & airy, zero stacked stars)
-  for (let pass = 0; pass < 24; pass += 1) {
+  for (let pass = 0; pass < 32; pass += 1) {
     let anyMoved = false;
     for (let i = 0; i < n; i += 1) {
       for (let j = i + 1; j < n; j += 1) {
         const dx = offsets[j].dx - offsets[i].dx;
         const dy = offsets[j].dy - offsets[i].dy;
         const dist = Math.hypot(dx, dy);
-        const minDist = Math.max(54, ((radii[i] ?? 2) + (radii[j] ?? 2)) * 7.2 + 32);
+        const radiusSum = (radii[i] ?? 2) + (radii[j] ?? 2);
+        const minDist =
+          isMainNode[i] || isMainNode[j]
+            ? Math.max(46, radiusSum * 4.4 + 22)
+            : Math.max(44, radiusSum * 3.8 + 20);
         if (dist < minDist) {
           anyMoved = true;
           const overlap = minDist - dist;
@@ -479,7 +730,7 @@ function layoutConversationRequests(
 
   return {
     offsets,
-    boundRadius: Math.max(38, maxExtent + 14),
+    boundRadius: Math.max(36, maxExtent + 12),
   };
 }
 
@@ -563,12 +814,12 @@ export function computeStarPositions(
     };
   });
 
-  // Compute cohesive 2D sky canvas dimensions (0.56 packing density = cozy neighboring constellations)
+  // Compute cohesive 2D sky canvas dimensions (0.68 packing density = cozy neighboring constellations)
   let totalArea = 0;
   for (const item of prepared) {
     totalArea += Math.PI * Math.pow(item.boundRadius + 18, 2);
   }
-  const skyArea = Math.max(220_000, totalArea / 0.56);
+  const skyArea = Math.max(165_000, totalArea / 0.68);
   const skyWidth = Math.sqrt(skyArea * 1.72);
   const skyHeight = skyArea / skyWidth;
   const tanTilt = Math.tan(GALACTIC_TILT_RAD);
@@ -604,7 +855,7 @@ export function computeStarPositions(
     const minReqDist = (a: number, b: number) => {
       const rA = prepared[a].boundRadius;
       const rB = prepared[b].boundRadius;
-      return rA + rB + Math.max(26, 0.08 * (rA + rB));
+      return rA + rB + Math.max(20, 0.055 * (rA + rB));
     };
 
     for (let pass = 0; pass < 230; pass += 1) {
@@ -684,10 +935,16 @@ export function computeStarPositions(
     const item = prepared[convIndex];
     const cx = centersX[convIndex];
     const cy = centersY[convIndex];
+    const hasMainRequest = item.orderedReqs.some((req) => !req.is_subagent);
 
     for (let reqIdx = 0; reqIdx < item.orderedReqs.length; reqIdx += 1) {
       const request = item.orderedReqs[reqIdx];
       const off = item.offsets[reqIdx];
+      const isCompanion = hasMainRequest && request.is_subagent;
+      const subagentClusterId = isCompanion
+        ? `subcluster:${item.star.id}:${request.session_id || request.id}`
+        : null;
+
       nodes.push({
         id: request.id,
         request,
@@ -710,6 +967,8 @@ export function computeStarPositions(
           item.magnitudes[reqIdx],
         ),
         effectiveTokens: item.tokensList[reqIdx],
+        subagentClusterId,
+        isCompanionMicroStar: isCompanion,
       });
     }
   }
@@ -728,4 +987,224 @@ export function computeStarPositions(
   }
 
   return nodes;
+}
+
+function resolveClusterParentNode(
+  convNodes: StarNode[],
+  memberIdSet: Set<string>,
+  firstMember: StarNode,
+  parentRequestId: string | null,
+  parentSessionId: string | null,
+): StarNode | null {
+  if (parentRequestId) {
+    const matched = convNodes.find(
+      (n) => !memberIdSet.has(n.id) && (n.id === parentRequestId || n.request.id === parentRequestId),
+    );
+    if (matched) {
+      return matched;
+    }
+  }
+
+  if (parentSessionId) {
+    let bestBefore: StarNode | null = null;
+    let latestAny: StarNode | null = null;
+    for (const candidate of convNodes) {
+      if (memberIdSet.has(candidate.id)) continue;
+      if (candidate.request.session_id !== parentSessionId) continue;
+      if (!latestAny || candidate.index >= latestAny.index) {
+        latestAny = candidate;
+      }
+      if (candidate.index < firstMember.index && (!bestBefore || candidate.index >= bestBefore.index)) {
+        bestBefore = candidate;
+      }
+    }
+    if (bestBefore) return bestBefore;
+    if (latestAny) return latestAny;
+  }
+
+  return convNodes.find((n) => !n.request.is_subagent) ?? null;
+}
+
+/**
+ * Aggregate companion subagent StarNodes into per-session SubagentCluster summaries
+ * anchored at the geometric centroid of each cluster and linked to its causal parent node.
+ */
+export function buildSubagentClusters(
+  nodes: StarNode[],
+  mode: TokenMode,
+): SubagentCluster[] {
+  if (nodes.length === 0) return [];
+
+  const convNodesMap = new Map<string, StarNode[]>();
+  const clusterGroups = new Map<string, StarNode[]>();
+
+  for (const node of nodes) {
+    const convId = node.star.id;
+    let convBucket = convNodesMap.get(convId);
+    if (!convBucket) {
+      convBucket = [];
+      convNodesMap.set(convId, convBucket);
+    }
+    convBucket.push(node);
+
+    const clusterId = node.subagentClusterId;
+    if (clusterId) {
+      let group = clusterGroups.get(clusterId);
+      if (!group) {
+        group = [];
+        clusterGroups.set(clusterId, group);
+      }
+      group.push(node);
+    }
+  }
+
+  const clusters: SubagentCluster[] = [];
+
+  for (const [clusterId, rawMembers] of clusterGroups.entries()) {
+    const memberNodes = [...rawMembers].sort(
+      (a, b) => a.requestIndexInConv - b.requestIndexInConv || a.index - b.index,
+    );
+    const firstMember = memberNodes[0];
+    const lastMember = memberNodes[memberNodes.length - 1];
+    const star = firstMember.star;
+    const conversationId = star.id;
+    const sessionId = firstMember.request.session_id || firstMember.request.id;
+    const summary = star.subagents.find((s) => s.id === sessionId);
+
+    const memberParentRequestId =
+      memberNodes.find((m) => Boolean(m.request.parent_request_id))?.request.parent_request_id || null;
+    const memberParentSessionId =
+      memberNodes.find((m) => Boolean(m.request.parent_session_id))?.request.parent_session_id || null;
+
+    const parentRequestId = summary?.parent_request_id || memberParentRequestId || null;
+    const explicitParentSessionId = summary?.parent_session_id || memberParentSessionId || null;
+
+    const convNodes = convNodesMap.get(conversationId) ?? [];
+    const memberIdSet = new Set(memberNodes.map((m) => m.id));
+    const parentNode = resolveClusterParentNode(
+      convNodes,
+      memberIdSet,
+      firstMember,
+      parentRequestId,
+      explicitParentSessionId,
+    );
+
+    const parentSessionId =
+      explicitParentSessionId || parentNode?.request.session_id || conversationId;
+    const parentNodeId = parentNode?.id ?? null;
+
+    let sumX = 0;
+    let sumY = 0;
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    let firstNodeIndex = Number.POSITIVE_INFINITY;
+    let lastNodeIndex = Number.NEGATIVE_INFINITY;
+    let sumTotalTokens = 0;
+    let sumNonCacheTokens = 0;
+
+    for (const m of memberNodes) {
+      sumX += m.x;
+      sumY += m.y;
+      if (m.x < minX) minX = m.x;
+      if (m.x > maxX) maxX = m.x;
+      if (m.y < minY) minY = m.y;
+      if (m.y > maxY) maxY = m.y;
+      if (m.index < firstNodeIndex) firstNodeIndex = m.index;
+      if (m.index > lastNodeIndex) lastNodeIndex = m.index;
+      sumTotalTokens += m.request.total_tokens;
+      sumNonCacheTokens += m.request.non_cache_tokens;
+    }
+
+    const meanX = sumX / memberNodes.length;
+    const meanY = sumY / memberNodes.length;
+
+    let anchorX = meanX;
+    let anchorY = meanY;
+    let outwardAngle = 0;
+
+    if (parentNode) {
+      const dx = anchorX - parentNode.x;
+      const dy = anchorY - parentNode.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 1e-4) {
+        outwardAngle = Math.atan2(dy, dx);
+      } else {
+        const fallbackDx = firstMember.x - parentNode.x;
+        const fallbackDy = firstMember.y - parentNode.y;
+        outwardAngle =
+          Math.hypot(fallbackDx, fallbackDy) > 1e-4
+            ? Math.atan2(fallbackDy, fallbackDx)
+            : 0;
+      }
+      if (dist < 64) {
+        anchorX = parentNode.x + Math.cos(outwardAngle) * 64;
+        anchorY = parentNode.y + Math.sin(outwardAngle) * 64;
+      }
+    } else {
+      const dx = anchorX - firstMember.convCenterX;
+      const dy = anchorY - firstMember.convCenterY;
+      outwardAngle = Math.hypot(dx, dy) > 1e-4 ? Math.atan2(dy, dx) : 0;
+    }
+
+    const requestCount =
+      summary?.request_count && summary.request_count > 0
+        ? summary.request_count
+        : memberNodes.length;
+    const totalTokens = sumTotalTokens > 0 ? sumTotalTokens : (summary?.total_tokens ?? 0);
+    const nonCacheTokens =
+      sumNonCacheTokens > 0 ? sumNonCacheTokens : (summary?.non_cache_tokens ?? 0);
+    const effectiveTokens = mode === 'total' ? totalTokens : nonCacheTokens;
+    const primaryModel =
+      summary?.primary_model || firstMember.request.model || star.primary_model || 'unknown';
+    const role = summary?.role || firstMember.request.subagent_role || '';
+    const typeName = summary?.type_name || '';
+    const lastStatus =
+      summary?.last_status || lastMember.request.status || star.last_status || 'UNKNOWN';
+    const startedAt = summary?.started_at || firstMember.request.created_at || star.started_at;
+    const endedAt = summary?.ended_at || lastMember.request.created_at || star.ended_at;
+    const localDate = firstMember.request.local_date || star.local_date;
+
+    const magnitude = computeMagnitude(effectiveTokens);
+    const clusterRadius = clamp(
+      4.4 + magnitude * 4.2 + Math.log1p(requestCount) * 0.85,
+      4.6,
+      11.2,
+    );
+    const color = computeStarSpectralColor(primaryModel, clusterId, magnitude);
+
+    clusters.push({
+      id: clusterId,
+      sessionId,
+      conversationId,
+      parentSessionId,
+      parentRequestId,
+      parentNodeId,
+      role,
+      typeName,
+      primaryModel,
+      requestCount,
+      effectiveTokens,
+      totalTokens,
+      nonCacheTokens,
+      startedAt,
+      endedAt,
+      localDate,
+      lastStatus,
+      anchorX,
+      anchorY,
+      outwardAngle,
+      clusterRadius,
+      magnitude,
+      color,
+      firstNodeIndex,
+      lastNodeIndex,
+      memberIds: memberNodes.map((m) => m.id),
+      memberNodes,
+      streamBounds: { minX, maxX, minY, maxY },
+    });
+  }
+
+  return clusters;
 }

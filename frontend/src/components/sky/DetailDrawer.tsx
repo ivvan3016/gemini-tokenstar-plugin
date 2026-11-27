@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import type { CelestialType, TokenMode } from '../../types/sky';
 import { getDisplayTitle } from '../../logic/filters';
 import { effectiveTokens } from '../../logic/metrics';
-import { getModelSpectralColor, type StarNode } from '../../logic/starLayout';
+import { getModelSpectralColor, type StarNode, type SubagentCluster } from '../../logic/starLayout';
 
 export interface CelestialMeta {
   type: CelestialType;
@@ -196,9 +196,26 @@ export interface DetailDrawerProps {
   node: StarNode;
   tokenMode: TokenMode;
   privacyMode: boolean;
+  clusters?: SubagentCluster[];
+  expandedClusterIds?: Set<string>;
+  expandAllSubagents?: boolean;
+  onToggleCluster?: (clusterId: string) => void;
+  onFocusCluster?: (cluster: SubagentCluster) => void;
   onClose: () => void;
   onJumpToStats: (starId: string) => void;
 }
+
+const CLUSTER_ACTION_BTN_STYLE: CSSProperties = {
+  fontSize: '10.5px',
+  padding: '2px 8px',
+  borderRadius: '999px',
+  border: '1px solid rgba(168, 206, 255, 0.34)',
+  background: 'rgba(84, 134, 224, 0.2)',
+  color: '#dceaff',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
+};
 
 const DRAWER_STYLE: CSSProperties = {
   position: 'absolute',
@@ -232,6 +249,11 @@ export function DetailDrawer({
   node,
   tokenMode,
   privacyMode,
+  clusters,
+  expandedClusterIds,
+  expandAllSubagents = false,
+  onToggleCluster,
+  onFocusCluster,
   onClose,
   onJumpToStats,
 }: DetailDrawerProps) {
@@ -334,6 +356,18 @@ export function DetailDrawer({
                 {request.subagent_role || '子代理'}
               </span>
             )}
+            {request.is_subagent &&
+              node.subagentClusterId &&
+              onToggleCluster &&
+              !expandAllSubagents && (
+                <button
+                  type="button"
+                  onClick={() => onToggleCluster(node.subagentClusterId!)}
+                  style={CLUSTER_ACTION_BTN_STYLE}
+                >
+                  收起为伴星团
+                </button>
+              )}
             {star.is_orphan_subagent && (
               <span
                 style={{
@@ -625,6 +659,13 @@ export function DetailDrawer({
                 const subTokens =
                   tokenMode === 'total' ? sub.total_tokens : sub.non_cache_tokens;
                 const roleLabel = sub.role || sub.type_name || '子代理';
+                const cluster = clusters?.find(
+                  (c) => c.conversationId === star.id && c.sessionId === sub.id,
+                );
+                const stepCount = sub.request_count || cluster?.requestCount || 0;
+                const isExpanded = cluster
+                  ? Boolean(expandAllSubagents || expandedClusterIds?.has(cluster.id))
+                  : false;
                 return (
                   <div
                     key={sub.id}
@@ -663,9 +704,45 @@ export function DetailDrawer({
                         <span>{sub.primary_model || 'unknown'}</span>
                       </div>
                     </div>
-                    <span style={{ fontWeight: 600, color: '#dce8ff', flexShrink: 0 }}>
-                      {formatTokenCount(subTokens)}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                      <span
+                        style={{
+                          fontWeight: 600,
+                          color: '#dce8ff',
+                          fontVariantNumeric: 'tabular-nums',
+                        }}
+                      >
+                        {stepCount} 步 · {formatTokenCount(subTokens)}
+                      </span>
+                      {cluster && !isExpanded && (onFocusCluster || onToggleCluster) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onFocusCluster) {
+                              onFocusCluster(cluster);
+                            } else {
+                              onToggleCluster?.(cluster.id);
+                            }
+                          }}
+                          style={CLUSTER_ACTION_BTN_STYLE}
+                        >
+                          展开轨迹
+                        </button>
+                      )}
+                      {cluster && isExpanded && !expandAllSubagents && onToggleCluster && (
+                        <button
+                          type="button"
+                          onClick={() => onToggleCluster(cluster.id)}
+                          style={{
+                            ...CLUSTER_ACTION_BTN_STYLE,
+                            background: 'rgba(16, 26, 48, 0.65)',
+                            borderColor: 'rgba(164, 194, 248, 0.24)',
+                          }}
+                        >
+                          收起星团
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}

@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { CelestialType, ConversationStar, StarFilterState, TokenMode } from '../../types/sky';
-import { filterStarNodes, getDisplayTitle } from '../../logic/filters';
+import { filterStarNodes, getDisplayTitle, getMatchingClusterIds } from '../../logic/filters';
 import { effectiveTokens } from '../../logic/metrics';
-import { computeStarPositions, getModelSpectralColor, type StarNode } from '../../logic/starLayout';
+import {
+  buildSubagentClusters,
+  computeStarPositions,
+  getModelSpectralColor,
+  type StarNode,
+  type SubagentCluster,
+} from '../../logic/starLayout';
 import {
   computeFitCamera,
   exportSkyPng,
@@ -75,6 +81,13 @@ export function computePlaybackBaseRate(totalNodes: number): number {
   return Math.max(1.3, totalNodes / 34);
 }
 
+function pickRepresentativeMember(cluster: SubagentCluster): StarNode | null {
+  if (cluster.memberNodes.length === 0) return null;
+  return cluster.memberNodes.reduce((best, curr) =>
+    curr.effectiveTokens > best.effectiveTokens ? curr : best,
+  );
+}
+
 /** Immersive Canvas 2D Starry Sky Tab with request-level constellations, filter HUD, legend, playback, and 2x PNG export. */
 export function SkyTab({
   stars,
@@ -89,6 +102,7 @@ export function SkyTab({
   onNotify,
 }: SkyTabProps) {
   const nodes = useMemo(() => computeStarPositions(stars, tokenMode), [stars, tokenMode]);
+  const clusters = useMemo(() => buildSubagentClusters(nodes, tokenMode), [nodes, tokenMode]);
 
   const [filterOpen, setFilterOpen] = useState(true);
   const [legendOpen, setLegendOpen] = useState(false);
@@ -102,15 +116,23 @@ export function SkyTab({
   const [showGrid, setShowGrid] = useState(true);
   const [showConstellations, setShowConstellations] = useState(true);
   const [showNebulae, setShowNebulae] = useState(true);
+  const [expandedClusterIds, setExpandedClusterIds] = useState<Set<string>>(() => new Set());
+  const [expandAllSubagents, setExpandAllSubagents] = useState(false);
+  const [collapseAllSignal, setCollapseAllSignal] = useState(0);
 
   const [query, setQuery] = useState('');
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [selectedTypes, setSelectedTypes] = useState<CelestialType[]>([]);
 
-  // Stores selected StarNode.id (request star id)
+  // Stores selected StarNode.id (request star id) and active cluster highlight id
   const [selectedStarId, setSelectedStarId] = useState<string | null>(null);
+  const [selectedClusterId, setSelectedClusterId] = useState<string | null>(null);
   const [hoveredState, setHoveredState] = useState<{
     node: StarNode;
+    pos: { x: number; y: number };
+  } | null>(null);
+  const [hoveredClusterState, setHoveredClusterState] = useState<{
+    cluster: SubagentCluster;
     pos: { x: number; y: number };
   } | null>(null);
 
@@ -174,6 +196,11 @@ export function SkyTab({
     return new Set(matchedNodes.map((n) => n.id));
   }, [hasActiveFilter, matchedNodes]);
 
+  const matchingClusterIds = useMemo(
+    () => (hasActiveFilter ? getMatchingClusterIds(clusters, matchingIds) : null),
+    [clusters, hasActiveFilter, matchingIds],
+  );
+
   const matchedConvCount = useMemo(
     () => new Set(matchedNodes.map((n) => n.star.id)).size,
     [matchedNodes],
@@ -192,6 +219,18 @@ export function SkyTab({
     if (exactNode) {
       setPlaybackActive(false);
       setIsPlaying(false);
+      if (exactNode.subagentClusterId) {
+        const clusterId = exactNode.subagentClusterId;
+        setExpandedClusterIds((prev) => {
+          if (prev.has(clusterId)) return prev;
+          const next = new Set(prev);
+          next.add(clusterId);
+          return next;
+        });
+        setSelectedClusterId(clusterId);
+      } else {
+        setSelectedClusterId(null);
+      }
       setSelectedStarId(exactNode.id);
       requestCamera({
         x: exactNode.x,
@@ -209,6 +248,18 @@ export function SkyTab({
       );
       setPlaybackActive(false);
       setIsPlaying(false);
+      if (brightest.subagentClusterId) {
+        const clusterId = brightest.subagentClusterId;
+        setExpandedClusterIds((prev) => {
+          if (prev.has(clusterId)) return prev;
+          const next = new Set(prev);
+          next.add(clusterId);
+          return next;
+        });
+        setSelectedClusterId(clusterId);
+      } else {
+        setSelectedClusterId(null);
+      }
       setSelectedStarId(brightest.id);
 
       if (convNodes.length === 1) {
@@ -288,6 +339,24 @@ export function SkyTab({
     };
   }, [isPlaying, playbackSpeed, nodes.length]);
 
+  const collapseManualClusters = useCallback(
+    (clearSelection: boolean) => {
+      setExpandedClusterIds(new Set());
+      setCollapseAllSignal((s) => s + 1);
+      if (clearSelection) {
+        setSelectedStarId(null);
+        setSelectedClusterId(null);
+      } else {
+        if (selectedNode?.subagentClusterId) {
+          const cluster = clusters.find((c) => c.id === selectedNode.subagentClusterId);
+          setSelectedStarId(cluster?.parentNodeId ?? null);
+        }
+        setSelectedClusterId(null);
+      }
+    },
+    [clusters, selectedNode],
+  );
+
   // Close popovers / drawer on Escape and outside clicks for export menu
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -295,7 +364,16 @@ export function SkyTab({
         if (exportPreview) setExportPreview(null);
         else if (exportOpen) setExportOpen(false);
         else if (legendOpen) setLegendOpen(false);
-        else if (selectedStarId) setSelectedStarId(null);
+        else if (selectedStarId || selectedClusterId) {
+          if (!expandAllSubagents) {
+            collapseManualClusters(true);
+          } else {
+            setSelectedStarId(null);
+            setSelectedClusterId(null);
+          }
+        } else if (!expandAllSubagents && expandedClusterIds.size > 0) {
+          collapseManualClusters(true);
+        }
       }
     };
     const onDocClick = (e: MouseEvent) => {
@@ -309,7 +387,16 @@ export function SkyTab({
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('mousedown', onDocClick);
     };
-  }, [exportPreview, exportOpen, legendOpen, selectedStarId]);
+  }, [
+    exportPreview,
+    exportOpen,
+    legendOpen,
+    selectedStarId,
+    selectedClusterId,
+    expandAllSubagents,
+    expandedClusterIds.size,
+    collapseManualClusters,
+  ]);
 
   const handleViewportSizeChange = useCallback((size: { width: number; height: number }) => {
     viewportRef.current = size;
@@ -333,16 +420,127 @@ export function SkyTab({
     [],
   );
 
-  const handleSelectStar = useCallback((node: StarNode | null) => {
-    setSelectedStarId(node ? node.id : null);
+  const handleSelectStar = useCallback(
+    (node: StarNode | null) => {
+      if (!node) {
+        setSelectedStarId(null);
+        setSelectedClusterId(null);
+        if (!expandAllSubagents) {
+          setExpandedClusterIds(new Set());
+          setCollapseAllSignal((s) => s + 1);
+        }
+        return;
+      }
+      setSelectedStarId(node.id);
+      setSelectedClusterId(node.subagentClusterId ?? null);
+    },
+    [expandAllSubagents],
+  );
+
+  const handleHoverCluster = useCallback(
+    (cluster: SubagentCluster | null, screenPos: { x: number; y: number } | null) => {
+      if (cluster && screenPos) {
+        setHoveredClusterState({ cluster, pos: screenPos });
+      } else {
+        setHoveredClusterState(null);
+      }
+    },
+    [],
+  );
+
+  const handleSelectCluster = useCallback((cluster: SubagentCluster | null) => {
+    if (!cluster) {
+      setSelectedClusterId(null);
+      return;
+    }
+    setExpandedClusterIds((prev) => {
+      if (prev.has(cluster.id)) return prev;
+      const next = new Set(prev);
+      next.add(cluster.id);
+      return next;
+    });
+    setSelectedClusterId(cluster.id);
+    setHoveredClusterState(null);
+    const member = pickRepresentativeMember(cluster);
+    if (member) {
+      setSelectedStarId(member.id);
+    }
   }, []);
 
+  const handleToggleCluster = useCallback(
+    (clusterId: string) => {
+      const wasExpanded = expandedClusterIds.has(clusterId);
+      if (!wasExpanded && selectedNode?.subagentClusterId === clusterId) {
+        collapseManualClusters(false);
+        return;
+      }
+      setExpandedClusterIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(clusterId)) {
+          next.delete(clusterId);
+        } else {
+          next.add(clusterId);
+        }
+        return next;
+      });
+      if (wasExpanded) {
+        const cluster = clusters.find((c) => c.id === clusterId);
+        if (selectedNode?.subagentClusterId === clusterId) {
+          setSelectedStarId(cluster?.parentNodeId ?? null);
+        }
+        if (selectedClusterId === clusterId) {
+          setSelectedClusterId(null);
+        }
+      } else {
+        setSelectedClusterId(clusterId);
+      }
+    },
+    [clusters, expandedClusterIds, selectedClusterId, selectedNode, collapseManualClusters],
+  );
+
+  const handleFocusCluster = useCallback(
+    (cluster: SubagentCluster) => {
+      setPlaybackActive(false);
+      setIsPlaying(false);
+      setExpandedClusterIds((prev) => {
+        if (prev.has(cluster.id)) return prev;
+        const next = new Set(prev);
+        next.add(cluster.id);
+        return next;
+      });
+      setSelectedClusterId(cluster.id);
+      setHoveredClusterState(null);
+      const member = pickRepresentativeMember(cluster);
+      if (member) {
+        setSelectedStarId(member.id);
+      }
+      const parentNode = cluster.parentNodeId
+        ? nodes.find((n) => n.id === cluster.parentNodeId) ?? null
+        : null;
+      const fitNodes = parentNode ? [parentNode, ...cluster.memberNodes] : cluster.memberNodes;
+      const { width, height } = viewportRef.current;
+      const w = width > 0 ? width : DEFAULT_FALLBACK_VIEWPORT.width;
+      const h = height > 0 ? height : DEFAULT_FALLBACK_VIEWPORT.height;
+      requestCamera(computeFitCamera(fitNodes, w, h));
+    },
+    [nodes, requestCamera],
+  );
+
+  const handleZoomOutCollapse = useCallback(() => {
+    if (!expandAllSubagents && (expandedClusterIds.size > 0 || selectedClusterId !== null)) {
+      collapseManualClusters(false);
+    }
+  }, [expandAllSubagents, expandedClusterIds.size, selectedClusterId, collapseManualClusters]);
+
   const handleResetView = useCallback(() => {
+    if (!expandAllSubagents) {
+      collapseManualClusters(false);
+    }
     const { width, height } = viewportRef.current;
     const w = width > 0 ? width : DEFAULT_FALLBACK_VIEWPORT.width;
     const h = height > 0 ? height : DEFAULT_FALLBACK_VIEWPORT.height;
     requestCamera(computeFitCamera(nodes, w, h));
-  }, [nodes, requestCamera]);
+  }, [expandAllSubagents, collapseManualClusters, nodes, requestCamera]);
 
   const handleFocusMatched = () => {
     if (matchedNodes.length === 0) return;
@@ -438,6 +636,9 @@ export function SkyTab({
       showGrid: mode === 'wallpaper' ? false : showGrid,
       showConstellations,
       showNebulae,
+      clusters,
+      expandedClusterIds,
+      expandAllSubagents,
     };
 
     setExportOpen(false);
@@ -497,24 +698,37 @@ export function SkyTab({
 
   // Tooltip coordinates clamped inside container bounds
   const isNarrowViewport = viewportSize.width > 0 && viewportSize.width < 760;
+  const hasManualExpanded = !expandAllSubagents && expandedClusterIds.size > 0;
+  const clusterHudActive = expandAllSubagents || hasManualExpanded;
+  const clusterHudLabel = expandAllSubagents
+    ? '子代理：展开'
+    : hasManualExpanded
+      ? `子代理：收起 (${expandedClusterIds.size})`
+      : '子代理：星团';
+  const clusterHudTitle = expandAllSubagents
+    ? '当前已展开全部子代理伴星团，点击收起为伴星团'
+    : hasManualExpanded
+      ? `当前已展开 ${expandedClusterIds.size} 个子代理伴星团，点击全部收起`
+      : '伴星团即子代理调用生成的星群，点击全部展开（也可点击单个伴星团或放大查看）';
 
   const tooltipCoords = useMemo(() => {
-    if (!hoveredState) return null;
+    const pos = hoveredState?.pos ?? hoveredClusterState?.pos ?? null;
+    if (!pos) return null;
     const vw = viewportSize.width || DEFAULT_FALLBACK_VIEWPORT.width;
     const vh = viewportSize.height || DEFAULT_FALLBACK_VIEWPORT.height;
     const cardW = 262;
-    const cardH = 142;
+    const cardH = hoveredState ? 142 : 148;
     const rightReserve = selectedNode && !isNarrowViewport ? 388 : 16;
     const left =
-      hoveredState.pos.x + 16 + cardW > vw - rightReserve
-        ? Math.max(12, hoveredState.pos.x - cardW - 14)
-        : hoveredState.pos.x + 16;
+      pos.x + 16 + cardW > vw - rightReserve
+        ? Math.max(12, pos.x - cardW - 14)
+        : pos.x + 16;
     const top =
-      hoveredState.pos.y + 14 + cardH > vh - 70
-        ? Math.max(12, hoveredState.pos.y - cardH - 12)
-        : hoveredState.pos.y + 14;
+      pos.y + 14 + cardH > vh - 70
+        ? Math.max(12, pos.y - cardH - 12)
+        : pos.y + 14;
     return { left, top };
-  }, [hoveredState, selectedNode, viewportSize, isNarrowViewport]);
+  }, [hoveredState, hoveredClusterState, selectedNode, viewportSize, isNarrowViewport]);
 
   return (
     <section className="ts-sky-tab" aria-label="星空画布视图" style={ROOT_STYLE}>
@@ -531,10 +745,20 @@ export function SkyTab({
         showGrid={showGrid}
         showConstellations={showConstellations}
         showNebulae={showNebulae}
+        clusters={clusters}
+        expandedClusterIds={expandedClusterIds}
+        expandAllSubagents={expandAllSubagents}
+        collapseAllSignal={collapseAllSignal}
+        matchingClusterIds={matchingClusterIds}
+        hoveredClusterId={hoveredClusterState?.cluster.id ?? null}
+        selectedClusterId={selectedClusterId}
         onCameraChange={handleCameraChange}
         onViewportSizeChange={handleViewportSizeChange}
         onHoverStar={handleHoverStar}
         onSelectStar={handleSelectStar}
+        onHoverCluster={handleHoverCluster}
+        onSelectCluster={handleSelectCluster}
+        onZoomOutCollapse={handleZoomOutCollapse}
         onResetView={handleResetView}
       />
 
@@ -701,6 +925,34 @@ export function SkyTab({
               }}
             >
               星云
+            </button>
+
+            <button
+              type="button"
+              aria-pressed={clusterHudActive}
+              title={clusterHudTitle}
+              onClick={() => {
+                if (expandAllSubagents) {
+                  setExpandAllSubagents(false);
+                  collapseManualClusters(false);
+                } else if (expandedClusterIds.size > 0) {
+                  collapseManualClusters(false);
+                } else {
+                  setExpandAllSubagents(true);
+                }
+              }}
+              style={{
+                ...HUD_BTN_STYLE,
+                background: clusterHudActive
+                  ? 'rgba(84, 134, 224, 0.24)'
+                  : 'rgba(16, 26, 48, 0.52)',
+                borderColor: clusterHudActive
+                  ? 'rgba(166, 206, 255, 0.42)'
+                  : 'rgba(164, 194, 248, 0.16)',
+                color: clusterHudActive ? '#ffffff' : 'rgba(206, 222, 250, 0.78)',
+              }}
+            >
+              {clusterHudLabel}
             </button>
 
             {/* PNG Export Dropdown */}
@@ -1016,13 +1268,127 @@ export function SkyTab({
         </div>
       )}
 
+      {/* Hover Cluster Tooltip */}
+      {hoveredClusterState && !hoveredState && tooltipCoords && (
+        <div
+          role="tooltip"
+          style={{
+            ...GLASS_PANEL_STYLE,
+            position: 'absolute',
+            left: `${tooltipCoords.left}px`,
+            top: `${tooltipCoords.top}px`,
+            width: '262px',
+            padding: '10px 12px',
+            pointerEvents: 'none',
+            zIndex: 35,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '5px' }}>
+            <span
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: '50%',
+                background: hoveredClusterState.cluster.color,
+                boxShadow: `0 0 8px ${hoveredClusterState.cluster.color}`,
+                flexShrink: 0,
+              }}
+            />
+            <span
+              style={{
+                fontSize: '11px',
+                padding: '1px 6px',
+                borderRadius: '999px',
+                background: 'rgba(154, 184, 255, 0.14)',
+                color: '#b8d7ff',
+              }}
+            >
+              伴星团
+            </span>
+            <span
+              style={{
+                fontSize: '10.5px',
+                color: 'rgba(186, 206, 240, 0.78)',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              请求数 {hoveredClusterState.cluster.requestCount} 步
+            </span>
+            <span style={{ fontSize: '11px', color: 'rgba(186, 206, 240, 0.72)', marginLeft: 'auto' }}>
+              {hoveredClusterState.cluster.localDate}
+            </span>
+          </div>
+
+          <div
+            style={{
+              fontSize: '13px',
+              fontWeight: 600,
+              color: '#f2f6ff',
+              marginBottom: '4px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {hoveredClusterState.cluster.role || hoveredClusterState.cluster.typeName || '子代理'}
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '8px',
+              fontSize: '11.5px',
+              paddingTop: '5px',
+              borderTop: '1px solid rgba(164, 194, 248, 0.12)',
+              marginBottom: '4px',
+            }}
+          >
+            <span
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                color: '#cfe0ff',
+              }}
+            >
+              {hoveredClusterState.cluster.primaryModel}
+            </span>
+            <span style={{ fontWeight: 700, color: '#ffffff', flexShrink: 0 }}>
+              {formatTokenCount(
+                tokenMode === 'total'
+                  ? hoveredClusterState.cluster.totalTokens
+                  : hoveredClusterState.cluster.nonCacheTokens,
+              )}
+            </span>
+          </div>
+
+          <div style={{ fontSize: '10.5px', color: 'rgba(168, 204, 255, 0.78)' }}>
+            点击展开子代理微星链
+          </div>
+        </div>
+      )}
+
       {/* Right Floating Detail Drawer */}
       {selectedNode && (
         <DetailDrawer
           node={selectedNode}
           tokenMode={tokenMode}
           privacyMode={privacyMode}
-          onClose={() => setSelectedStarId(null)}
+          clusters={clusters}
+          expandedClusterIds={expandedClusterIds}
+          expandAllSubagents={expandAllSubagents}
+          onToggleCluster={handleToggleCluster}
+          onFocusCluster={handleFocusCluster}
+          onClose={() => {
+            if (selectedNode?.subagentClusterId && !expandAllSubagents) {
+              collapseManualClusters(true);
+            } else {
+              setSelectedStarId(null);
+              setSelectedClusterId(null);
+            }
+          }}
           onJumpToStats={onJumpToStats}
         />
       )}

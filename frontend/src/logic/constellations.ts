@@ -9,6 +9,8 @@ export interface ConstellationSegment {
   toIndex: number;
   isBranch: boolean;
   tier: 'primary' | 'secondary';
+  kind?: 'main' | 'subagent_bridge' | 'subagent_stream';
+  subagentClusterId?: string | null;
 }
 
 interface IndexedNode {
@@ -226,6 +228,8 @@ function makeConstellationSegment(
   b: IndexedNode,
   isBranch: boolean,
   tier: 'primary' | 'secondary',
+  kind: 'main' | 'subagent_bridge' | 'subagent_stream' = isBranch ? 'subagent_stream' : 'main',
+  subagentClusterId: string | null = null,
 ): ConstellationSegment {
   // Orient every segment forward in global chronological order for draw-on & sweep flow
   const [fromItem, toItem] = a.index <= b.index ? [a, b] : [b, a];
@@ -238,7 +242,107 @@ function makeConstellationSegment(
     toIndex: toItem.index,
     isBranch,
     tier,
+    kind,
+    subagentClusterId,
   };
+}
+
+function partitionConversationItems(
+  conversationId: string,
+  list: IndexedNode[],
+): {
+  hasMainRequest: boolean;
+  mainItems: IndexedNode[];
+  subItemsBySession: Map<string, IndexedNode[]>;
+} {
+  const hasMainRequest = list.some((item) => !item.node.request.is_subagent);
+  const mainItems: IndexedNode[] = [];
+  const subItemsBySession = new Map<string, IndexedNode[]>();
+
+  const pushSubItem = (item: IndexedNode) => {
+    const subKey = item.node.request.session_id || item.node.id;
+    let subList = subItemsBySession.get(subKey);
+    if (!subList) {
+      subList = [];
+      subItemsBySession.set(subKey, subList);
+    }
+    subList.push(item);
+  };
+
+  if (hasMainRequest) {
+    for (const item of list) {
+      if (!item.node.request.is_subagent) {
+        mainItems.push(item);
+      } else {
+        pushSubItem(item);
+      }
+    }
+    return { hasMainRequest, mainItems, subItemsBySession };
+  }
+
+  for (const item of list) {
+    if (item.node.request.session_id === conversationId) {
+      mainItems.push(item);
+    } else {
+      pushSubItem(item);
+    }
+  }
+  if (mainItems.length === 0) {
+    mainItems.push(...list);
+    subItemsBySession.clear();
+  }
+  return { hasMainRequest, mainItems, subItemsBySession };
+}
+
+function resolveExactSubagentParent(
+  subKey: string,
+  subList: IndexedNode[],
+  itemById: Map<string, IndexedNode>,
+  itemsBySession: Map<string, IndexedNode[]>,
+): IndexedNode | null {
+  const subHead = subList[0];
+  const subIdSet = new Set(subList.map((item) => item.node.id));
+  const subSummary = subHead.node.star.subagents.find((s) => s.id === subKey);
+
+  const parentRequestId =
+    subList.find((item) => Boolean(item.node.request.parent_request_id))?.node.request
+      .parent_request_id ||
+    subSummary?.parent_request_id ||
+    null;
+
+  if (parentRequestId) {
+    const matched = itemById.get(parentRequestId);
+    if (matched && !subIdSet.has(matched.node.id)) {
+      return matched;
+    }
+  }
+
+  const parentSessionId =
+    subList.find((item) => Boolean(item.node.request.parent_session_id))?.node.request
+      .parent_session_id ||
+    subSummary?.parent_session_id ||
+    null;
+
+  if (parentSessionId && parentSessionId !== subKey) {
+    const sessionItems = itemsBySession.get(parentSessionId);
+    if (sessionItems) {
+      let latestBefore: IndexedNode | null = null;
+      for (const candidate of sessionItems) {
+        if (subIdSet.has(candidate.node.id)) continue;
+        if (
+          candidate.index < subHead.index &&
+          (!latestBefore || candidate.index > latestBefore.index)
+        ) {
+          latestBefore = candidate;
+        }
+      }
+      if (latestBefore) {
+        return latestBefore;
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -275,22 +379,10 @@ export function buildConstellationSegments(
   for (const [conversationId, list] of byConv.entries()) {
     if (list.length < 2) continue;
 
-    const mainItems: IndexedNode[] = [];
-    const subItemsBySession = new Map<string, IndexedNode[]>();
-
-    for (const item of list) {
-      if (!item.node.request.is_subagent) {
-        mainItems.push(item);
-      } else {
-        const subKey = item.node.request.session_id || item.node.id;
-        let subList = subItemsBySession.get(subKey);
-        if (!subList) {
-          subList = [];
-          subItemsBySession.set(subKey, subList);
-        }
-        subList.push(item);
-      }
-    }
+    const { hasMainRequest, mainItems, subItemsBySession } = partitionConversationItems(
+      conversationId,
+      list,
+    );
 
     // Main-thread time-weighted Prim MST spine
     if (mainItems.length >= 2) {
@@ -311,16 +403,33 @@ export function buildConstellationSegments(
           ordered.length <= 3 || bothBright || bothSpine ? 'primary' : 'secondary';
 
         allSegments.push(
-          makeConstellationSegment(conversationId, itemFrom, itemTo, false, tier),
+          makeConstellationSegment(conversationId, itemFrom, itemTo, false, tier, 'main', null),
         );
       }
     }
 
-    // Subagent MST pockets bridged cleanly to temporally/spatially close parent anchor
+    // Subagent MST pockets bridged to exact causal parent request / session or closest main node
     if (subItemsBySession.size > 0) {
-      const anchorPool: IndexedNode[] = [...mainItems];
+      const itemById = new Map<string, IndexedNode>();
+      const itemsBySession = new Map<string, IndexedNode[]>();
+      for (const item of list) {
+        itemById.set(item.node.id, item);
+        if (item.node.request.id && item.node.request.id !== item.node.id) {
+          itemById.set(item.node.request.id, item);
+        }
+        const sessKey = item.node.request.session_id || item.node.id;
+        let bucket = itemsBySession.get(sessKey);
+        if (!bucket) {
+          bucket = [];
+          itemsBySession.set(sessKey, bucket);
+        }
+        bucket.push(item);
+      }
 
-      for (const subList of subItemsBySession.values()) {
+      for (const [subKey, rawSubList] of subItemsBySession.entries()) {
+        const subList = [...rawSubList].sort(compareChronologicalItems);
+        const clusterId = hasMainRequest ? `subcluster:${conversationId}:${subKey}` : null;
+
         if (subList.length >= 2) {
           const { ordered, edges } = buildTimeWeightedMstEdges(subList);
           for (const e of edges) {
@@ -331,13 +440,28 @@ export function buildConstellationSegments(
                 ordered[e.v],
                 true,
                 'secondary',
+                'subagent_stream',
+                clusterId,
               ),
             );
           }
         }
 
-        if (anchorPool.length > 0) {
-          const bridge = findClosestPair(anchorPool, subList);
+        const exactParent = resolveExactSubagentParent(subKey, subList, itemById, itemsBySession);
+        if (exactParent) {
+          allSegments.push(
+            makeConstellationSegment(
+              conversationId,
+              exactParent,
+              subList[0],
+              true,
+              'secondary',
+              'subagent_bridge',
+              clusterId,
+            ),
+          );
+        } else if (mainItems.length > 0) {
+          const bridge = findClosestPair(mainItems, subList);
           if (bridge) {
             allSegments.push(
               makeConstellationSegment(
@@ -346,13 +470,11 @@ export function buildConstellationSegments(
                 bridge.b,
                 true,
                 'secondary',
+                'subagent_bridge',
+                clusterId,
               ),
             );
           }
-        }
-
-        for (const s of subList) {
-          anchorPool.push(s);
         }
       }
     }

@@ -24,6 +24,11 @@ export interface SubagentSummary {
   total_tokens: number;
   non_cache_tokens: number;
   last_status: string;
+  parent_session_id?: string | null;
+  parent_request_id?: string | null;
+  request_count?: number;
+  started_at?: string;
+  ended_at?: string;
 }
 
 export interface RequestStar {
@@ -45,6 +50,8 @@ export interface RequestStar {
   status: string;
   is_subagent: boolean;
   subagent_role: string;
+  parent_session_id?: string | null;
+  parent_request_id?: string | null;
   celestial_type: CelestialType;
   celestial_reason: string;
 }

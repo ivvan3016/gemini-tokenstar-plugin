@@ -262,3 +262,245 @@ def test_model_bucketing_error_steps_and_swarm_subagent(tmp_brain):
     assert unknown_rec is not None
     assert unknown_rec.primary_model == "unknown"
     assert unknown_rec.last_status == "UNKNOWN"
+
+
+def test_spawn_step_index_mapping_across_generic_and_bool_guards(tmp_brain):
+    conv_dir = tmp_brain.add_conversation(
+        conv_id="conv-spawn-map",
+        lines=[
+            {
+                "step_index": 0,
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:00Z",
+                "content": "调度子代理",
+            },
+            {
+                "step_index": 1,
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:10Z",
+                "model": "gemini-pro",
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "tool_calls": [{"name": "invoke_subagent"}],
+            },
+            {
+                "step_index": 2,
+                "type": "GENERIC",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:12Z",
+                "content": "checkpoint step",
+            },
+            {
+                "step_index": 3,
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:20Z",
+                "model": "gemini-pro",
+                "input_tokens": 80,
+                "output_tokens": 10,
+                "tool_calls": [{"name": "read_file"}],
+            },
+            {
+                "step_index": 4,
+                "type": "GENERIC",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:25Z",
+                "content": "another generic step",
+            },
+            {
+                "step_index": 5,
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:01:00Z",
+                "model": "gemini-pro",
+                "input_tokens": 90,
+                "output_tokens": 15,
+                "tool_calls": [{"name": "invoke_subagent"}],
+            },
+        ],
+        subagents=[
+            {
+                "conversationId": "sub-early",
+                "spawnStepIndex": None,
+                "subagentDescriptor": {"typeName": "explore", "role": "First"},
+            },
+            {
+                "conversationId": "sub-early",
+                "spawnStepIndex": 4,
+                "subagentDescriptor": {"typeName": "explore", "role": "Ignored"},
+            },
+            {
+                "conversationId": "sub-early",
+                "spawnStepIndex": 9,
+            },
+            {
+                "conversationId": "sub-bool",
+                "spawnStepIndex": True,
+                "subagentDescriptor": {"typeName": "code", "role": "BoolGuard"},
+            },
+        ],
+    )
+
+    # Backward-compatible 2-arg call still works and preserves spawnStepIndex
+    two_arg_links = extract_subagent_links(conv_dir, [])
+    by_id_2arg = {link.child_id: link for link in two_arg_links}
+    assert by_id_2arg["sub-early"].spawn_step_index == 4
+    assert by_id_2arg["sub-bool"].spawn_step_index is None
+
+    record, warnings = parse_antigravity_dir(conv_dir)
+    assert warnings == []
+    assert record is not None
+    links = {link.child_id: link for link in record.subagent_links}
+    assert links["sub-early"].spawn_step_index == 4
+    assert links["sub-early"].spawn_request_id == "conv-spawn-map:1"
+    assert links["sub-early"].role == "First"
+    assert links["sub-bool"].spawn_step_index is None
+    assert links["sub-bool"].spawn_request_id is None
+
+    # Fallback when no earlier request has subagent_calls_count >= 1
+    fallback_dir = tmp_brain.add_conversation(
+        conv_id="conv-no-sub-tool",
+        lines=[
+            {
+                "step_index": 1,
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:10Z",
+                "model": "gemini-flash",
+                "input_tokens": 50,
+                "output_tokens": 10,
+                "tool_calls": [{"name": "read_file"}],
+            },
+            {
+                "step_index": 4,
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:30Z",
+                "model": "gemini-flash",
+                "input_tokens": 60,
+                "output_tokens": 10,
+            },
+        ],
+        subagents=[
+            {
+                "conversationId": "sub-fallback",
+                "spawnStepIndex": 3,
+            }
+        ],
+    )
+    fallback_rec, _ = parse_antigravity_dir(fallback_dir)
+    assert fallback_rec is not None
+    assert fallback_rec.subagent_links[0].spawn_request_id == "conv-no-sub-tool:1"
+
+
+def test_generic_transcript_fallback_and_line_no_step_index(tmp_brain):
+    conv_dir = tmp_brain.add_conversation(
+        conv_id="conv-generic-fallback",
+        lines=[
+            {
+                "step_index": 0,
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:00Z",
+                "content": "测试 GENERIC 回退",
+            },
+            {
+                "step_index": 1,
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:10Z",
+                "model": "gemini-pro",
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "tool_calls": [{"name": "invoke_subagent"}],
+            },
+            {
+                "step_index": 2,
+                "type": "GENERIC",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:15Z",
+                "content": json.dumps({"conversationId": "sub-gen-json"}),
+            },
+            {
+                "step_index": 3,
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:01:00Z",
+                "model": "gemini-pro",
+                "input_tokens": 120,
+                "output_tokens": 30,
+                "tool_calls": [{"name": "invoke_subagent"}],
+            },
+            {
+                "step_index": 4,
+                "type": "GENERIC",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:01:05Z",
+                "content": 'Spawned worker: {"conversation_id": "sub-gen-regex"}',
+            },
+        ],
+        subagents=[
+            {
+                "conversationId": "sub-gen-json",
+                "subagentDescriptor": {"typeName": "research", "role": "Worker"},
+            },
+            {
+                "conversationId": "sub-gen-regex",
+                "spawnStepIndex": 4,
+                "subagentDescriptor": {"typeName": "code", "role": "Coder"},
+            },
+        ],
+    )
+    record, warnings = parse_antigravity_dir(conv_dir)
+    assert warnings == []
+    assert record is not None
+    links = {link.child_id: link for link in record.subagent_links}
+    assert links["sub-gen-json"].role == "Worker"
+    assert links["sub-gen-json"].spawn_step_index == 2
+    assert links["sub-gen-json"].spawn_request_id == "conv-generic-fallback:1"
+    assert links["sub-gen-regex"].spawn_step_index == 4
+    assert links["sub-gen-regex"].spawn_request_id == "conv-generic-fallback:3"
+
+    # Without explicit step_index on transcript entries, line_no is used consistently
+    lineno_dir = tmp_brain.add_conversation(
+        conv_id="conv-lineno",
+        lines=[
+            {
+                "type": "USER_INPUT",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:00Z",
+                "content": "无 step_index",
+            },
+            {
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:10Z",
+                "model": "gemini-flash",
+                "input_tokens": 40,
+                "output_tokens": 10,
+                "tool_calls": [{"name": "invoke_subagent"}],
+            },
+            {
+                "type": "GENERIC",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:12Z",
+                "content": '{"conversationId": "sub-only-generic"}',
+            },
+            {
+                "type": "PLANNER_RESPONSE",
+                "status": "DONE",
+                "created_at": "2026-11-25T10:00:20Z",
+                "model": "gemini-flash",
+                "input_tokens": 50,
+                "output_tokens": 15,
+            },
+        ],
+    )
+    lineno_rec, _ = parse_antigravity_dir(lineno_dir)
+    assert lineno_rec is not None
+    assert len(lineno_rec.subagent_links) == 1
+    assert lineno_rec.subagent_links[0].child_id == "sub-only-generic"
+    assert lineno_rec.subagent_links[0].spawn_step_index == 3
+    assert lineno_rec.subagent_links[0].spawn_request_id == "conv-lineno:2"

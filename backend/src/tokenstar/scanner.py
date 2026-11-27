@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from collections.abc import Sequence
 from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from tokenstar.models import (
     SubagentSummary,
 )
 from tokenstar.sources.antigravity import parse_antigravity_dir
-from tokenstar.sources.base import RawSessionRecord, SubagentLink
+from tokenstar.sources.base import RawRequestRecord, RawSessionRecord, SubagentLink
 from tokenstar.sources.gemini_cli import GeminiCliAdapter
 
 
@@ -53,13 +54,63 @@ def _merge_model_buckets(
     )
 
 
+def _resolve_parent_request_id(
+    link: SubagentLink,
+    parent_sess_id: str,
+    child: RawSessionRecord,
+    records_by_session: dict[str, RawSessionRecord],
+    reqs_by_session: dict[str, list[RawRequestRecord]],
+) -> str | None:
+    """Resolve the parent request ID that spawned `child`."""
+    parent_reqs = reqs_by_session.get(parent_sess_id, [])
+    if not parent_reqs:
+        return None
+
+    if link.spawn_request_id is not None and any(
+        req.id == link.spawn_request_id for req in parent_reqs
+    ):
+        return link.spawn_request_id
+
+    parent_rec = records_by_session.get(parent_sess_id)
+    if parent_rec is not None:
+        eligible = [
+            req
+            for req in parent_reqs
+            if (req.created_at or parent_rec.started_at) <= child.started_at
+        ]
+        if eligible:
+            return eligible[-1].id
+
+    return parent_reqs[0].id
+
+
 def _build_conversation_star(
     root: RawSessionRecord,
-    children: list[tuple[RawSessionRecord, SubagentLink]],
+    children: Sequence[
+        tuple[RawSessionRecord, SubagentLink, str]
+        | tuple[RawSessionRecord, SubagentLink]
+    ],
     is_orphan: bool,
 ) -> ConversationStar:
     """Aggregate root and linked child records into a ConversationStar."""
-    all_records = [root, *(child for child, _ in children)]
+    normalized_children: list[tuple[RawSessionRecord, SubagentLink, str]] = [
+        (item[0], item[1], item[2])
+        if len(item) == 3
+        else (item[0], item[1], root.id)
+        for item in children
+    ]
+    all_records = [root, *(child for child, _, _ in normalized_children)]
+    records_by_session: dict[str, RawSessionRecord] = {
+        rec.id: rec for rec in all_records
+    }
+    reqs_by_session: dict[str, list[RawRequestRecord]] = {
+        rec.id: sorted(
+            rec.requests,
+            key=lambda req: (req.created_at or rec.started_at, req.step_index),
+        )
+        for rec in all_records
+    }
+
     merged_models = _merge_model_buckets(all_records)
     primary_model = (
         max(merged_models, key=lambda m: (m.total_tokens, m.steps, m.model)).model
@@ -77,14 +128,33 @@ def _build_conversation_star(
     model_steps_count = sum(r.model_steps_count for r in all_records)
     tool_calls_count = sum(r.tool_calls_count for r in all_records)
     error_steps_count = sum(r.error_steps_count for r in all_records)
-    subagent_calls_count = max(root.subagent_calls_count, len(children))
+    subagent_calls_count = max(root.subagent_calls_count, len(normalized_children))
+
+    resolved_children: list[
+        tuple[RawSessionRecord, SubagentLink, str, str | None]
+    ] = [
+        (
+            child,
+            link,
+            parent_sess_id,
+            _resolve_parent_request_id(
+                link, parent_sess_id, child, records_by_session, reqs_by_session
+            ),
+        )
+        for child, link, parent_sess_id in normalized_children
+    ]
 
     subagents = [
         SubagentSummary(
             id=child.id,
             role=link.role,
             type_name=link.type_name,
+            parent_session_id=parent_sess_id,
+            parent_request_id=parent_request_id,
             primary_model=child.primary_model,
+            request_count=len(child.requests),
+            started_at=child.started_at.isoformat(),
+            ended_at=child.ended_at.isoformat(),
             input_tokens=child.input_tokens,
             cache_read_tokens=child.cache_read_tokens,
             output_tokens=child.output_tokens,
@@ -92,7 +162,7 @@ def _build_conversation_star(
             non_cache_tokens=child.non_cache_tokens,
             last_status=child.last_status,
         )
-        for child, link in children
+        for child, link, parent_sess_id, parent_request_id in resolved_children
     ]
 
     title = f"子代理任务 {root.id[:8]}" if is_orphan else root.title
@@ -110,7 +180,13 @@ def _build_conversation_star(
 
     request_items: list[tuple[datetime, int, int, RequestStar]] = []
 
-    def append_requests(rec: RawSessionRecord, is_sub: bool, sub_role: str) -> None:
+    def append_requests(
+        rec: RawSessionRecord,
+        is_sub: bool,
+        sub_role: str,
+        parent_session_id: str | None = None,
+        parent_request_id: str | None = None,
+    ) -> None:
         for req in rec.requests:
             req_dt = req.created_at or rec.started_at
             req_local_date = req.local_date or rec.local_date
@@ -145,6 +221,8 @@ def _build_conversation_star(
                         status=req.status,
                         is_subagent=is_sub,
                         subagent_role=sub_role,
+                        parent_session_id=parent_session_id,
+                        parent_request_id=parent_request_id,
                         celestial_type=req_ctype,
                         celestial_reason=req_reason,
                     ),
@@ -152,8 +230,14 @@ def _build_conversation_star(
             )
 
     append_requests(root, False, "")
-    for child, link in children:
-        append_requests(child, True, link.role or link.type_name)
+    for child, link, parent_sess_id, parent_request_id in resolved_children:
+        append_requests(
+            child,
+            True,
+            link.role or link.type_name,
+            parent_session_id=parent_sess_id,
+            parent_request_id=parent_request_id,
+        )
 
     request_items.sort(key=lambda item: (item[0], item[1], item[2], item[3].id))
     requests = [item[3] for item in request_items]
@@ -215,9 +299,9 @@ def _collect_children_bfs(
     root_id: str,
     records_by_id: dict[str, RawSessionRecord],
     claimed_ids: set[str],
-) -> list[tuple[RawSessionRecord, SubagentLink]]:
+) -> list[tuple[RawSessionRecord, SubagentLink, str]]:
     """Collect transitive subagent children in BFS order with cycle protection."""
-    children: list[tuple[RawSessionRecord, SubagentLink]] = []
+    children: list[tuple[RawSessionRecord, SubagentLink, str]] = []
     queue: deque[str] = deque([root_id])
 
     while queue:
@@ -230,7 +314,7 @@ def _collect_children_bfs(
             if child_id not in records_by_id or child_id in claimed_ids:
                 continue
             claimed_ids.add(child_id)
-            children.append((records_by_id[child_id], link))
+            children.append((records_by_id[child_id], link, current_id))
             queue.append(child_id)
 
     return children
@@ -238,7 +322,13 @@ def _collect_children_bfs(
 
 def _resolve_root_groups(
     records_by_id: dict[str, RawSessionRecord],
-) -> list[tuple[RawSessionRecord, list[tuple[RawSessionRecord, SubagentLink]], bool]]:
+) -> list[
+    tuple[
+        RawSessionRecord,
+        list[tuple[RawSessionRecord, SubagentLink, str]],
+        bool,
+    ]
+]:
     """Group raw records into root conversations (or orphans) deterministically."""
     if not records_by_id:
         return []
@@ -256,7 +346,11 @@ def _resolve_root_groups(
 
     claimed_ids: set[str] = set()
     groups: list[
-        tuple[RawSessionRecord, list[tuple[RawSessionRecord, SubagentLink]], bool]
+        tuple[
+            RawSessionRecord,
+            list[tuple[RawSessionRecord, SubagentLink, str]],
+            bool,
+        ]
     ] = []
 
     def claim_group(root_id: str) -> None:
@@ -383,7 +477,7 @@ class TokenStarScanner:
         conversations: list[ConversationStar] = []
 
         for root_rec, children, is_orphan in groups:
-            dep_ids = {root_rec.id, *(child.id for child, _ in children)}
+            dep_ids = {root_rec.id, *(child.id for child, _, _ in children)}
             dep_sig = (
                 is_orphan,
                 (root_rec.id, self._cache.get_raw_version(root_rec.id)),
@@ -393,8 +487,11 @@ class TokenStarScanner:
                         self._cache.get_raw_version(child.id),
                         link.role,
                         link.type_name,
+                        parent_sess_id,
+                        link.spawn_step_index,
+                        link.spawn_request_id,
                     )
-                    for child, link in children
+                    for child, link, parent_sess_id in children
                 ),
             )
 
