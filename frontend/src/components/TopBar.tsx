@@ -15,6 +15,9 @@ export interface TopBarProps {
   isLoading?: boolean;
   isRefreshing: boolean;
   onRefresh: () => void;
+  onOpenUpdate?: () => void;
+  hasUpdateAvailable?: boolean;
+  isCheckingUpdate?: boolean;
 }
 
 function pad2(value: number): string {
@@ -46,6 +49,9 @@ export function TopBar({
   isLoading = false,
   isRefreshing,
   onRefresh,
+  onOpenUpdate,
+  hasUpdateAvailable = false,
+  isCheckingUpdate = false,
 }: TopBarProps) {
   const [warningsOpen, setWarningsOpen] = useState(false);
   const warningsWrapRef = useRef<HTMLDivElement | null>(null);
@@ -252,6 +258,35 @@ export function TopBar({
             </svg>
             <span>{isRefreshing ? '刷新中' : '刷新'}</span>
           </button>
+
+          {onOpenUpdate && (
+            <button
+              type="button"
+              className={`ts-hud-pill ts-update-btn${hasUpdateAvailable ? ' is-update-available' : ''}`}
+              onClick={onOpenUpdate}
+              aria-label="检查更新"
+              title={hasUpdateAvailable ? '发现新版本，点击查看与更新' : '检查插件版本更新'}
+            >
+              <svg
+                className={isCheckingUpdate ? 'ts-spin' : undefined}
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M12 19V5" />
+                <polyline points="6 11 12 5 18 11" />
+                <path d="M5 19h14" />
+              </svg>
+              <span>检查更新</span>
+              {hasUpdateAvailable && <span className="ts-update-dot" aria-hidden="true" />}
+            </button>
+          )}
         </div>
       </div>
     </header>

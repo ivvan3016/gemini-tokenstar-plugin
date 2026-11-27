@@ -15,6 +15,7 @@ from mcp.server.mcpserver import MCPServer
 
 from tokenstar.config import APP_HTML_ENV_VAR, resolve_export_dir
 from tokenstar.scanner import TokenStarScanner
+from tokenstar.updater import apply_plugin_update, check_for_update
 
 FastMCP = MCPServer
 
@@ -153,6 +154,7 @@ def create_mcp_server(
     scanner: TokenStarScanner,
     html_path: Path | None = None,
     export_dir: Path | None = None,
+    plugin_root: Path | None = None,
 ) -> MCPServer:
     """Create and configure the TokenStar MCP App server."""
     server = MCPServer("tokenstar")
@@ -223,6 +225,28 @@ def create_mcp_server(
     ) -> dict[str, Any]:
         """App-only tool persisting an exported PNG screenshot into the export directory."""
         return save_png_export(png_base64, filename=filename, export_dir=export_dir)
+
+    @server.tool(
+        name="tokenstar_check_update",
+        description="Check GitHub Releases on demand for a newer TokenStar plugin version.",
+        meta={"ui": {"visibility": ["app"]}},
+    )
+    def tokenstar_check_update() -> dict[str, Any]:
+        """App-only tool checking GitHub Releases on demand."""
+        return check_for_update(plugin_root=plugin_root, html_path=html_path)
+
+    @server.tool(
+        name="tokenstar_apply_update",
+        description="Download and apply an official TokenStar GitHub Release bundle in place.",
+        meta={"ui": {"visibility": ["app"]}},
+    )
+    def tokenstar_apply_update(tag: str | None = None) -> dict[str, Any]:
+        """App-only tool downloading and applying a TokenStar Release bundle."""
+        return apply_plugin_update(
+            tag=tag,
+            plugin_root=plugin_root,
+            html_path=html_path,
+        )
 
     return server
 

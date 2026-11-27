@@ -50,6 +50,8 @@ async def test_open_tokenstar_payload_and_entrypoints(tmp_brain, tmp_path, monke
         "tokenstar_get_sky_data",
         "tokenstar_refresh",
         "tokenstar_save_export",
+        "tokenstar_check_update",
+        "tokenstar_apply_update",
     }
     assert by_name["open_tokenstar"].meta["ui"]["resourceUri"] == APP_URI
     assert [
@@ -61,6 +63,8 @@ async def test_open_tokenstar_payload_and_entrypoints(tmp_brain, tmp_path, monke
     assert by_name["tokenstar_get_sky_data"].meta["ui"]["visibility"] == ["app"]
     assert by_name["tokenstar_refresh"].meta["ui"]["visibility"] == ["app"]
     assert by_name["tokenstar_save_export"].meta["ui"]["visibility"] == ["app"]
+    assert by_name["tokenstar_check_update"].meta["ui"]["visibility"] == ["app"]
+    assert by_name["tokenstar_apply_update"].meta["ui"]["visibility"] == ["app"]
 
     resources = await server.list_resources()
     ui_res = next(r for r in resources if str(r.uri) == APP_URI)

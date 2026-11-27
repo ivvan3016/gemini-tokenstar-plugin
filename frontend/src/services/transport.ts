@@ -5,7 +5,11 @@ import {
   applyHostStyleVariables,
   type McpUiHostContext,
 } from '@modelcontextprotocol/ext-apps';
-import type { SkyDataResponse } from '../types/sky';
+import type {
+  SkyDataResponse,
+  UpdateApplyResult,
+  UpdateCheckResult,
+} from '../types/sky';
 
 export interface ExportSaveResult {
   status: 'saved';
@@ -19,6 +23,9 @@ export interface DataTransport {
   getSkyData(): Promise<SkyDataResponse>;
   refresh(): Promise<SkyDataResponse>;
   saveExportPng?(pngBase64: string, filename: string): Promise<ExportSaveResult>;
+  checkUpdate?(): Promise<UpdateCheckResult>;
+  applyUpdate?(tag?: string): Promise<UpdateApplyResult>;
+  openExternalUrl?(url: string): Promise<void>;
   dispose(): void;
 }
 
@@ -104,6 +111,39 @@ function isExportSaveResult(value: unknown): value is ExportSaveResult {
   );
 }
 
+function isUpdateCheckResult(value: unknown): value is UpdateCheckResult {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<UpdateCheckResult>;
+  return (
+    (candidate.status === 'ok' || candidate.status === 'error') &&
+    typeof candidate.current_version === 'string' &&
+    typeof candidate.has_update === 'boolean' &&
+    typeof candidate.can_self_update === 'boolean' &&
+    typeof candidate.release_url === 'string'
+  );
+}
+
+function isUpdateApplyResult(value: unknown): value is UpdateApplyResult {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<UpdateApplyResult>;
+  return (
+    candidate.status === 'updated' &&
+    typeof candidate.updated_version === 'string' &&
+    typeof candidate.backend_changed === 'boolean' &&
+    typeof candidate.restart_required === 'boolean' &&
+    typeof candidate.message === 'string'
+  );
+}
+
+function openBrowserExternalUrl(url: string): void {
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error('Only http/https URLs can be opened externally.');
+  }
+  if (typeof window !== 'undefined' && typeof window.open === 'function') {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+}
+
 export function extractSkyData(result: McpToolResultLike): SkyDataResponse {
   return unwrapMcpResult(
     result,
@@ -117,6 +157,22 @@ export function extractExportSaveResult(result: McpToolResultLike): ExportSaveRe
     result,
     isExportSaveResult,
     'Invalid ExportSaveResult payload returned from MCP tool',
+  );
+}
+
+export function extractUpdateCheckResult(result: McpToolResultLike): UpdateCheckResult {
+  return unwrapMcpResult(
+    result,
+    isUpdateCheckResult,
+    'Invalid UpdateCheckResult payload returned from MCP tool',
+  );
+}
+
+export function extractUpdateApplyResult(result: McpToolResultLike): UpdateApplyResult {
+  return unwrapMcpResult(
+    result,
+    isUpdateApplyResult,
+    'Invalid UpdateApplyResult payload returned from MCP tool',
   );
 }
 
@@ -136,6 +192,37 @@ function createHttpTransport(): DataTransport {
         throw new Error(`HTTP ${response.status} calling /api/refresh`);
       }
       return (await response.json()) as SkyDataResponse;
+    },
+    async checkUpdate(): Promise<UpdateCheckResult> {
+      const response = await fetch('/api/check-update');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} fetching /api/check-update`);
+      }
+      const payload = (await response.json()) as unknown;
+      if (!isUpdateCheckResult(payload)) {
+        throw new Error('Invalid UpdateCheckResult payload returned from /api/check-update');
+      }
+      return payload;
+    },
+    async applyUpdate(tag?: string): Promise<UpdateApplyResult> {
+      const response = await fetch('/api/apply-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tag ? { tag } : {}),
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | (Partial<UpdateApplyResult> & { error?: string })
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || `HTTP ${response.status} calling /api/apply-update`);
+      }
+      if (!isUpdateApplyResult(payload)) {
+        throw new Error('Invalid UpdateApplyResult payload returned from /api/apply-update');
+      }
+      return payload;
+    },
+    async openExternalUrl(url: string): Promise<void> {
+      openBrowserExternalUrl(url);
     },
     dispose(): void {
       // No persistent connection to tear down in HTTP mode.
@@ -167,6 +254,32 @@ function createMcpTransport(app: App): DataTransport {
       });
       return extractExportSaveResult(result as McpToolResultLike);
     },
+    async checkUpdate(): Promise<UpdateCheckResult> {
+      const result = await app.callServerTool({
+        name: 'tokenstar_check_update',
+        arguments: {},
+      });
+      return extractUpdateCheckResult(result as McpToolResultLike);
+    },
+    async applyUpdate(tag?: string): Promise<UpdateApplyResult> {
+      const result = await app.callServerTool({
+        name: 'tokenstar_apply_update',
+        arguments: tag ? { tag } : {},
+      });
+      return extractUpdateApplyResult(result as McpToolResultLike);
+    },
+    async openExternalUrl(url: string): Promise<void> {
+      if (!/^https?:\/\//i.test(url)) {
+        throw new Error('Only http/https URLs can be opened externally.');
+      }
+      try {
+        const res = await app.openLink({ url });
+        if (!res?.isError) return;
+      } catch {
+        // Fallback to window.open if host rejects openLink.
+      }
+      openBrowserExternalUrl(url);
+    },
     dispose(): void {
       void app.close().catch(() => undefined);
     },
@@ -184,7 +297,7 @@ export async function createTransport(
     return createHttpTransport();
   }
 
-  const app = new App({ name: 'TokenStar', version: '0.1.1' }, {}, { autoResize: true });
+  const app = new App({ name: 'TokenStar', version: '0.1.2' }, {}, { autoResize: true });
   app.onhostcontextchanged = (ctx) => {
     applyHostContext(ctx);
   };

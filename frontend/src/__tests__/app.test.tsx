@@ -1,7 +1,13 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ConversationStar, SkyDataResponse, SourceScanReport } from '../types/sky';
+import type {
+  ConversationStar,
+  SkyDataResponse,
+  SourceScanReport,
+  UpdateApplyResult,
+  UpdateCheckResult,
+} from '../types/sky';
 import type { DataTransport } from '../services/transport';
 import { TopBar } from '../components/TopBar';
 import { StarHeatmap } from '../components/stats/StarHeatmap';
@@ -1068,5 +1074,117 @@ describe('TopBar, StarHeatmap, UsageTables, StatsTab & App Integration', () => {
       r.getAttribute('data-request-id'),
     );
     expect(sortedIds).toEqual(['multi-day-conv:0', 'multi-day-conv:1']);
+  });
+
+  it('checks updates only on user click, applies update, and instructs reopening Antigravity on backend changes', async () => {
+    const checkResult: UpdateCheckResult = {
+      status: 'ok',
+      current_version: '0.1.1',
+      latest_version: '0.2.0',
+      tag_name: 'v0.2.0',
+      has_update: true,
+      can_self_update: true,
+      has_bundle_asset: true,
+      release_url: 'https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/tag/v0.2.0',
+      published_at: '2026-11-27T10:00:00Z',
+      release_notes: '- In-plugin updater support',
+      error: null,
+    };
+    const applyResult: UpdateApplyResult = {
+      status: 'updated',
+      previous_version: '0.1.1',
+      updated_version: '0.2.0',
+      backend_changed: true,
+      restart_required: true,
+      sync_deferred: true,
+      message: '已更新至 v0.2.0（包含后端改动），请关闭并重新打开 Antigravity 即可生效。',
+    };
+
+    const checkUpdate = vi.fn<() => Promise<UpdateCheckResult>>().mockResolvedValue(checkResult);
+    const applyUpdate = vi.fn<(tag?: string) => Promise<UpdateApplyResult>>().mockResolvedValue(applyResult);
+    const openExternalUrl = vi.fn<(url: string) => Promise<void>>().mockResolvedValue(undefined);
+
+    const transport: DataTransport = {
+      mode: 'mcp',
+      getSkyData: vi.fn().mockResolvedValue(makeSkyResponse([makeStar({ id: 'upd-1' })])),
+      refresh: vi.fn().mockResolvedValue(makeSkyResponse([makeStar({ id: 'upd-1' })])),
+      checkUpdate,
+      applyUpdate,
+      openExternalUrl,
+      dispose: vi.fn(),
+    };
+
+    await act(async () => {
+      root.render(<App transportFactory={vi.fn().mockResolvedValue(transport)} pollIntervalMs={0} />);
+    });
+
+    // Zero automatic background update checks on mount
+    expect(checkUpdate).not.toHaveBeenCalled();
+
+    const updateBtn = container.querySelector('button[aria-label="检查更新"]') as HTMLButtonElement | null;
+    expect(updateBtn).not.toBeNull();
+    await act(async () => {
+      updateBtn!.click();
+    });
+
+    expect(checkUpdate).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('版本与更新');
+    expect(container.textContent).toContain('v0.1.1');
+    expect(container.textContent).toContain('v0.2.0');
+    expect(container.textContent).toContain('In-plugin updater support');
+
+    const releaseBtn = findButtonByText(container, '查看 GitHub Release');
+    expect(releaseBtn).toBeDefined();
+    act(() => {
+      releaseBtn!.click();
+    });
+    expect(openExternalUrl).toHaveBeenCalledWith(checkResult.release_url);
+
+    const applyBtn = findButtonByText(container, '立即更新');
+    expect(applyBtn).toBeDefined();
+    await act(async () => {
+      applyBtn!.click();
+    });
+
+    expect(applyUpdate).toHaveBeenCalledWith('v0.2.0');
+    expect(container.textContent).toContain('关闭并重新打开 Antigravity');
+  });
+
+  it('hides one-click update button and shows Release/git pull guidance when can_self_update is false', async () => {
+    const checkResult: UpdateCheckResult = {
+      status: 'ok',
+      current_version: '0.1.1',
+      latest_version: '0.2.0',
+      tag_name: 'v0.2.0',
+      has_update: true,
+      can_self_update: false,
+      has_bundle_asset: true,
+      release_url: 'https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/tag/v0.2.0',
+      published_at: '2026-11-27T10:00:00Z',
+      release_notes: 'Web fallback test',
+      error: null,
+    };
+
+    const transport: DataTransport = {
+      mode: 'http',
+      getSkyData: vi.fn().mockResolvedValue(makeSkyResponse([makeStar({ id: 'upd-2' })])),
+      refresh: vi.fn().mockResolvedValue(makeSkyResponse([makeStar({ id: 'upd-2' })])),
+      checkUpdate: vi.fn().mockResolvedValue(checkResult),
+      applyUpdate: vi.fn(),
+      openExternalUrl: vi.fn(),
+      dispose: vi.fn(),
+    };
+
+    await act(async () => {
+      root.render(<App transportFactory={vi.fn().mockResolvedValue(transport)} pollIntervalMs={0} />);
+    });
+
+    await act(async () => {
+      findButtonByText(container, '检查更新')?.click();
+    });
+
+    expect(findButtonByText(container, '立即更新')).toBeUndefined();
+    expect(container.textContent).toContain('git pull');
+    expect(findButtonByText(container, '查看 GitHub Release')).toBeDefined();
   });
 });

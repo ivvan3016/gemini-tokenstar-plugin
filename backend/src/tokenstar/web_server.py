@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import socket
 import threading
 import webbrowser
@@ -10,6 +11,7 @@ from pathlib import Path
 
 import uvicorn
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
@@ -22,6 +24,7 @@ from tokenstar.config import (
 )
 from tokenstar.mcp_server import load_app_html
 from tokenstar.scanner import TokenStarScanner
+from tokenstar.updater import apply_plugin_update, check_for_update
 
 
 def find_available_port(
@@ -49,6 +52,7 @@ def find_available_port(
 def create_web_app(
     scanner: TokenStarScanner,
     html_path: Path | None = None,
+    plugin_root: Path | None = None,
 ) -> Starlette:
     """Create the Starlette ASGI app serving TokenStar UI and JSON APIs."""
     scan_lock = threading.Lock()
@@ -80,11 +84,48 @@ def create_web_app(
             }
         )
 
+    async def check_update(_request: Request) -> JSONResponse:
+        result = await run_in_threadpool(
+            check_for_update,
+            plugin_root,
+            html_path,
+        )
+        return JSONResponse(result)
+
+    async def apply_update(request: Request) -> JSONResponse:
+        tag: str | None = None
+        raw_body = await request.body()
+        if raw_body.strip():
+            try:
+                parsed = json.loads(raw_body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                return JSONResponse({"error": f"Invalid JSON request body: {exc}"}, status_code=400)
+            if not isinstance(parsed, dict):
+                return JSONResponse({"error": "Request body must be a JSON object."}, status_code=400)
+            raw_tag = parsed.get("tag")
+            if raw_tag is not None:
+                if not isinstance(raw_tag, str):
+                    return JSONResponse({"error": "Field 'tag' must be a string."}, status_code=400)
+                tag = raw_tag
+
+        try:
+            result = await run_in_threadpool(
+                apply_plugin_update,
+                tag,
+                plugin_root,
+                html_path,
+            )
+        except (RuntimeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(result)
+
     routes = [
         Route("/", index, methods=["GET"]),
         Route("/api/sky-data", get_sky_data, methods=["GET"]),
         Route("/api/refresh", refresh_sky_data, methods=["POST"]),
         Route("/api/health", health, methods=["GET"]),
+        Route("/api/check-update", check_update, methods=["GET"]),
+        Route("/api/apply-update", apply_update, methods=["POST"]),
     ]
     return Starlette(routes=routes)
 

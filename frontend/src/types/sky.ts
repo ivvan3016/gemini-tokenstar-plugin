@@ -100,3 +100,27 @@ export interface StarFilterState {
   celestialTypes: CelestialType[];
   date: string | null;
 }
+
+export interface UpdateCheckResult {
+  status: 'ok' | 'error';
+  current_version: string;
+  latest_version: string | null;
+  tag_name: string | null;
+  has_update: boolean;
+  can_self_update: boolean;
+  has_bundle_asset: boolean;
+  release_url: string;
+  published_at: string | null;
+  release_notes: string;
+  error: string | null;
+}
+
+export interface UpdateApplyResult {
+  status: 'updated';
+  previous_version: string;
+  updated_version: string;
+  backend_changed: boolean;
+  restart_required: boolean;
+  sync_deferred: boolean;
+  message: string;
+}

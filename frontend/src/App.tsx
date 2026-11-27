@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { SkyDataResponse, TokenMode } from './types/sky';
+import type {
+  SkyDataResponse,
+  TokenMode,
+  UpdateApplyResult,
+  UpdateCheckResult,
+} from './types/sky';
 import { createTransport, type DataTransport } from './services/transport';
 import { TopBar, type ActiveTab } from './components/TopBar';
+import { UpdateModal } from './components/UpdateModal';
 import { SkyTab } from './components/sky/SkyTab';
 import { StatsTab } from './components/stats/StatsTab';
 
@@ -44,6 +50,13 @@ export function App({
   const [highlightDate, setHighlightDate] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [isApplyingUpdate, setIsApplyingUpdate] = useState(false);
+  const [updateCheckResult, setUpdateCheckResult] = useState<UpdateCheckResult | null>(null);
+  const [updateApplyResult, setUpdateApplyResult] = useState<UpdateApplyResult | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
   const transportRef = useRef<DataTransport | null>(null);
   const dataRef = useRef<SkyDataResponse | null>(null);
   const signatureRef = useRef<string | null>(null);
@@ -51,6 +64,16 @@ export function App({
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const factoryRef = useRef(transportFactory);
   factoryRef.current = transportFactory;
+
+  const ensureTransport = useCallback(async (): Promise<DataTransport> => {
+    let transport = transportRef.current;
+    if (!transport) {
+      transport = await factoryRef.current();
+      transportRef.current = transport;
+      setTransportMode(transport.mode);
+    }
+    return transport;
+  }, []);
 
   const showToast = useCallback((message: string) => {
     setToastMessage(message);
@@ -165,12 +188,7 @@ export function App({
     if (isRefreshing || loading) return;
     setIsRefreshing(true);
     try {
-      let transport = transportRef.current;
-      if (!transport) {
-        transport = await factoryRef.current();
-        transportRef.current = transport;
-        setTransportMode(transport.mode);
-      }
+      const transport = await ensureTransport();
       const next = await transport.refresh();
       applySkyResponse(next);
     } catch (err) {
@@ -183,7 +201,7 @@ export function App({
     } finally {
       setIsRefreshing(false);
     }
-  }, [isRefreshing, loading, applySkyResponse, showToast]);
+  }, [isRefreshing, loading, applySkyResponse, ensureTransport, showToast]);
 
   const handleTogglePrivacy = useCallback(() => {
     setPrivacyMode((prev) => !prev);
@@ -224,6 +242,74 @@ export function App({
     return transport.saveExportPng(pngBase64, filename);
   }, []);
 
+  const handleCheckUpdate = useCallback(async () => {
+    if (isCheckingUpdate || isApplyingUpdate) return;
+    setIsCheckingUpdate(true);
+    setUpdateError(null);
+    setUpdateApplyResult(null);
+    try {
+      const transport = await ensureTransport();
+      if (!transport.checkUpdate) {
+        setUpdateError('当前运行模式不支持在线检查更新。');
+        return;
+      }
+      const res = await transport.checkUpdate();
+      setUpdateCheckResult(res);
+      if (res.status === 'error' && res.error) {
+        setUpdateError(res.error);
+      }
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : '检查更新失败');
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  }, [isCheckingUpdate, isApplyingUpdate, ensureTransport]);
+
+  const handleOpenUpdateModal = useCallback(() => {
+    setUpdateModalOpen(true);
+    if (!isApplyingUpdate && !updateApplyResult) {
+      void handleCheckUpdate();
+    }
+  }, [isApplyingUpdate, updateApplyResult, handleCheckUpdate]);
+
+  const handleCloseUpdateModal = useCallback(() => {
+    if (!isApplyingUpdate) {
+      setUpdateModalOpen(false);
+    }
+  }, [isApplyingUpdate]);
+
+  const handleApplyUpdate = useCallback(
+    async (tag?: string) => {
+      if (isApplyingUpdate) return;
+      setIsApplyingUpdate(true);
+      setUpdateError(null);
+      try {
+        const transport = await ensureTransport();
+        if (!transport.applyUpdate) {
+          throw new Error('当前运行环境不支持插件内自动更新。');
+        }
+        const res = await transport.applyUpdate(tag);
+        setUpdateApplyResult(res);
+      } catch (err) {
+        setUpdateError(err instanceof Error ? err.message : '下载或安装更新失败');
+      } finally {
+        setIsApplyingUpdate(false);
+      }
+    },
+    [isApplyingUpdate, ensureTransport],
+  );
+
+  const handleOpenExternalUrl = useCallback(async (url: string) => {
+    const transport = transportRef.current;
+    if (transport?.openExternalUrl) {
+      await transport.openExternalUrl(url);
+      return;
+    }
+    if (/^https?:\/\//i.test(url) && typeof window !== 'undefined' && typeof window.open === 'function') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  }, []);
+
   const stars = data?.conversations ?? [];
   const sources = data?.sources ?? [];
   const scanDurationMs = data?.scan_duration_ms ?? 0;
@@ -242,6 +328,22 @@ export function App({
         isLoading={loading}
         isRefreshing={isRefreshing}
         onRefresh={() => void handleRefresh()}
+        onOpenUpdate={handleOpenUpdateModal}
+        hasUpdateAvailable={Boolean(updateCheckResult?.has_update && !updateApplyResult)}
+        isCheckingUpdate={isCheckingUpdate}
+      />
+
+      <UpdateModal
+        isOpen={updateModalOpen}
+        isChecking={isCheckingUpdate}
+        isApplying={isApplyingUpdate}
+        checkResult={updateCheckResult}
+        applyResult={updateApplyResult}
+        error={updateError}
+        onClose={handleCloseUpdateModal}
+        onRecheck={() => void handleCheckUpdate()}
+        onApplyUpdate={(tag) => void handleApplyUpdate(tag)}
+        onOpenExternalUrl={(url) => void handleOpenExternalUrl(url)}
       />
 
       {toastMessage && (
