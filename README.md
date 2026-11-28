@@ -23,13 +23,15 @@
 
 It runs natively as an **Antigravity MCP App plugin** (`tokenstar-mcp`) directly inside Antigravity's conversation, side pane, or full-page sidebar view, as well as in **Standalone Web Mode** (`tokenstar-web`) in any desktop browser.
 
-<!-- Showcase: Add Privacy-Mode demo.gif and 2x exported sky-card.png under docs/media/ and uncomment to display on GitHub
 <div align="center">
-  <img src="docs/media/demo.gif" alt="TokenStar Live WebGL Sky Demo" width="100%" />
+  <img src="assets/preview-sky.png" alt="TokenStar Live WebGL Starry Sky Panorama" width="100%" />
   <br />
-  <img src="docs/media/sky-card.png" alt="TokenStar 2x Commemorative Sky Card" width="100%" />
+  <sub>Panoramic WebGL sky mapping model requests &amp; conversations into O–M spectral stars, pulsars, comets, and lensed black holes</sub>
+  <br /><br />
+  <img src="assets/preview-detail.png" alt="TokenStar Subagent Companion Clusters & Detail Drawer" width="100%" />
+  <br />
+  <sub>Focused constellation view with unfolded subagent companion globular clusters, tidal bridges, and request telemetry drawer</sub>
 </div>
--->
 
 ## Highlights
 

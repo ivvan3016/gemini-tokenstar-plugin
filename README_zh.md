@@ -23,13 +23,15 @@
 
 插件支持两种运行形态：**Antigravity MCP App 插件模式**（`tokenstar-mcp`，直接嵌入侧栏、辅助栏或对话内）与 **独立 Web 服务模式**（`tokenstar-web`，在桌面浏览器中运行）。
 
-<!-- Showcase: 开启隐私模式录制 demo.gif 与导出的 2x 纪念卡 sky-card.png 放入 docs/media/ 后取消注释即可展示
 <div align="center">
-  <img src="docs/media/demo.gif" alt="TokenStar 实时 WebGL 星空演示" width="100%" />
+  <img src="assets/preview-sky.png" alt="TokenStar 实时 WebGL 星空全景截图" width="100%" />
   <br />
-  <img src="docs/media/sky-card.png" alt="TokenStar 2x 纪念星空卡片" width="100%" />
+  <sub>全景星空视图：每次模型请求化作 O–M 真实光谱星体、双星、脉冲星、彗星与黑洞星座</sub>
+  <br /><br />
+  <img src="assets/preview-detail.png" alt="TokenStar 子代理伴星团展开与详情抽屉实机截图" width="100%" />
+  <br />
+  <sub>聚焦对话星座：子代理伴星团与弧形潮汐桥展开联动，并配合右侧请求明细与子代理消耗拆解抽屉</sub>
 </div>
--->
 
 ## 核心特性
 
