@@ -6,6 +6,8 @@
 
 **Interactive WebGL 1.0 Starry-Sky Observatory & Token Analytics for Antigravity**
 
+[![Release](https://img.shields.io/github/v/release/ivvan3016/gemini-tokenstar-plugin?style=flat-square&color=a855f7)](https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/latest)
+[![GitHub Stars](https://img.shields.io/github/stars/ivvan3016/gemini-tokenstar-plugin?style=flat-square&color=f59e0b)](https://github.com/ivvan3016/gemini-tokenstar-plugin/stargazers)
 [![Antigravity MCP App](https://img.shields.io/badge/Antigravity-MCP%20App-38bdf8?style=flat-square)](plugin/plugin.json)
 [![Python 3.12–3.13](https://img.shields.io/badge/Python-3.12%E2%80%933.13-3776ab?style=flat-square)](backend/pyproject.toml)
 [![React 19 + WebGL](https://img.shields.io/badge/Frontend-React%2019%20%2B%20WebGL-61dafb?style=flat-square)](frontend/package.json)
@@ -21,13 +23,24 @@
 
 It runs natively as an **Antigravity MCP App plugin** (`tokenstar-mcp`) directly inside Antigravity's conversation, side pane, or full-page sidebar view, as well as in **Standalone Web Mode** (`tokenstar-web`) in any desktop browser.
 
+<!-- Showcase: Add Privacy-Mode demo.gif and 2x exported sky-card.png under docs/media/ and uncomment to display on GitHub
+<div align="center">
+  <img src="docs/media/demo.gif" alt="TokenStar Live WebGL Sky Demo" width="100%" />
+  <br />
+  <img src="docs/media/sky-card.png" alt="TokenStar 2x Commemorative Sky Card" width="100%" />
+</div>
+-->
+
 ## Highlights
 
 - **Real-Time WebGL 1.0 Optical Sky:** Six coordinated GPU shader programs render a tilted galactic panorama, parallax starfield catalog, world-space FBM emission/reflection nebulae, animated optical star PSFs with Hubble/JWST diffraction spikes, foreground cosmic dust motes, and smooth starlight sweeps along constellation bonds.
 - **1 Request = 1 Star Constellations:** Conversations are laid out as distinct filament arcs, OB associations, and core-halo open clusters connected by Prim's Minimum Spanning Tree (`starLayout.ts` / `constellations.ts`), packed cleanly in 2D without inter-conversation overlap.
+- **Subagent Companion Globular Clusters & Tidal Bridges:** Multi-step subagent sessions aggregate into distinct orbiting companion globular clusters linked to their exact spawning parent request via curved tidal bridges (`buildSubagentClusters`), smoothly unfolding into near-circular open clusters on click, HUD toggle, or close-zoom auto-LOD (`zoom >= 1.15`) and collapsing cleanly on zoom-out, empty-sky clicks, or `Escape`.
+- **Silky Log-Space Zoom & Adaptive Min-Zoom Clarity:** Cursor-anchored logarithmic wheel interpolation glides smoothly across every zoom level, while premultiplied screen blending (`ONE, ONE_MINUS_SRC_COLOR`) and relative zoom-out optical compression keep dense panoramic clusters crisp at minimum zoom without dulling default-view brilliance.
 - **5 Celestial Archetypes:** Deterministically classifies both individual model requests and full conversations into main-sequence stars, binary star pairs, oblique-rotator pulsars, lensed black holes, and solar-wind comets.
 - **Real Stellar Astrophysics Visuals:** Maps request token volume to relative + logarithmic magnitude/size scaling, and assigns Morgan-Keenan **O-B-A-F-G-K-M** blackbody colors (~30,000K sapphire blue to ~3,100K crimson) anchored by model family with natural H-R temperature dispersion.
-- **Interactive Observatory Controls:** Pan, inertial glide, cursor-centered zoom, timeline epoch playback, multi-facet filtering (model, date, celestial type, search), equatorial RA/Dec grid / constellation / nebula HUD toggles, privacy mode, and 2x PNG wallpaper / commemorative card export.
+- **Interactive Observatory Controls & 2x Export:** Pan, inertial glide, timeline epoch playback, multi-facet filtering (model, date, celestial type, search), equatorial RA/Dec grid / constellation / nebula HUD toggles, privacy mode, and **2x PNG wallpaper / commemorative card export** (saving directly to OS Downloads in MCP mode or browser download).
+- **In-Plugin Update Check & One-Click Self-Update:** Check for new GitHub Releases right inside the top bar (`UpdateModal`) and apply updates in-place with rollback protection.
 - **Dual-Mode Architecture:** Communicates via SEP-1865 MCP App JSON-RPC (`@modelcontextprotocol/ext-apps`) inside Antigravity iframes and automatically falls back to local HTTP endpoints (`/api/sky-data`, `/api/refresh`) when opened standalone.
 
 ## Astronomical Encoding
@@ -64,7 +77,7 @@ flowchart LR
 
 - **Strictly Read-Only Log Scanning:** Reads `~/.gemini/antigravity/brain` (overridable via `TOKENSTAR_BRAIN_DIR` or `--brain-dir`) and `~/.gemini/tmp` without creating, modifying, or deleting any conversation or Antigravity state files.
 - **No Host Config Mutation:** Installation only writes inside the isolated target plugin directory (`~/.gemini/config/plugins/tokenstar`) and never edits `~/.gemini/config/config.json` or Antigravity binaries.
-- **100% Offline Single-File UI:** `dist/app.html` bundles React, `@modelcontextprotocol/ext-apps`, WebGL shaders, and styles into a single self-contained HTML file (`< 10 MiB`, ~831 KiB) with zero external CDN or network requests.
+- **100% Offline Single-File UI & Opt-In Updates:** `dist/app.html` bundles React, `@modelcontextprotocol/ext-apps`, WebGL shaders, and styles into a single self-contained HTML file (`< 10 MiB`, ~883 KiB) with zero external CDN or telemetry requests. The only optional outbound network call is checking/downloading a new GitHub Release when you explicitly click "Check for Updates".
 - **Ephemeral In-Memory Cache:** File fingerprints and computed star rollups stay strictly in server memory during execution.
 
 ## Prerequisites
@@ -171,6 +184,13 @@ Once staged, Antigravity automatically discovers the plugin:
 - Open **TokenStar** from the right side pane `+` menu (`aux_pane` entrypoint).
 - Or ask the agent in chat to open TokenStar (`open_tokenstar`).
 
+#### In-Plugin Updates (`v0.1.2+`)
+
+Click the update button in the top navigation bar to check GitHub Releases and upgrade in-place:
+
+- **Frontend-only updates:** Apply immediately the next time you reopen the TokenStar view.
+- **Backend changes included:** Restart Antigravity (`关闭并重新打开`) after updating so the updated Python MCP server reloads cleanly.
+
 #### Uninstall Plugin
 
 Remove the isolated directory directly (no global config changes to revert):
@@ -231,7 +251,8 @@ tokenstar-plugin/
 │   │   ├── sources/        # Read-only Antigravity & Gemini CLI transcript adapters
 │   │   ├── classifier.py   # Priority-ordered celestial classifier
 │   │   ├── config.py       # Classification thresholds & path defaults
-│   │   ├── scanner.py      # Subagent tree rollup & incremental cache
+│   │   ├── scanner.py      # Subagent tree & parent-request rollup + cache
+│   │   ├── updater.py      # GitHub Release update check & safe in-place updater
 │   │   ├── mcp_server.py   # SEP-1865 MCP App stdio server (tokenstar-mcp)
 │   │   └── web_server.py   # Standalone HTTP server (tokenstar-web)
 │   └── tests/              # Pytest unit & server integration tests
@@ -239,7 +260,9 @@ tokenstar-plugin/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── sky/        # WebGL 1.0 sky renderer, overlay canvas, HUD, drawer
-│   │   │   └── stats/      # Heatmap, token breakdown & sortable session tables
+│   │   │   ├── stats/      # Heatmap, token breakdown & sortable session tables
+│   │   │   ├── TopBar.tsx  # Navigation bar, live refresh & update trigger
+│   │   │   └── UpdateModal.tsx # In-plugin update status & one-click upgrade modal
 │   │   ├── logic/          # Layout physics, MST constellations, metrics & filters
 │   │   └── services/       # Dual-mode MCP App + HTTP transport
 │   └── package.json

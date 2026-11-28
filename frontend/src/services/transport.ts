@@ -297,7 +297,7 @@ export async function createTransport(
     return createHttpTransport();
   }
 
-  const app = new App({ name: 'TokenStar', version: '0.1.2' }, {}, { autoResize: true });
+  const app = new App({ name: 'TokenStar', version: '0.1.3' }, {}, { autoResize: true });
   app.onhostcontextchanged = (ctx) => {
     applyHostContext(ctx);
   };

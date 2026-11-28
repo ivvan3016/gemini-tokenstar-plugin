@@ -6,6 +6,8 @@
 
 **面向 Antigravity 的 WebGL 1.0 实时星空可视化与 Token 统计分析插件**
 
+[![Release](https://img.shields.io/github/v/release/ivvan3016/gemini-tokenstar-plugin?style=flat-square&color=a855f7)](https://github.com/ivvan3016/gemini-tokenstar-plugin/releases/latest)
+[![GitHub Stars](https://img.shields.io/github/stars/ivvan3016/gemini-tokenstar-plugin?style=flat-square&color=f59e0b)](https://github.com/ivvan3016/gemini-tokenstar-plugin/stargazers)
 [![Antigravity MCP App](https://img.shields.io/badge/Antigravity-MCP%20App-38bdf8?style=flat-square)](plugin/plugin.json)
 [![Python 3.12–3.13](https://img.shields.io/badge/Python-3.12%E2%80%933.13-3776ab?style=flat-square)](backend/pyproject.toml)
 [![React 19 + WebGL](https://img.shields.io/badge/Frontend-React%2019%20%2B%20WebGL-61dafb?style=flat-square)](frontend/package.json)
@@ -21,13 +23,24 @@
 
 插件支持两种运行形态：**Antigravity MCP App 插件模式**（`tokenstar-mcp`，直接嵌入侧栏、辅助栏或对话内）与 **独立 Web 服务模式**（`tokenstar-web`，在桌面浏览器中运行）。
 
+<!-- Showcase: 开启隐私模式录制 demo.gif 与导出的 2x 纪念卡 sky-card.png 放入 docs/media/ 后取消注释即可展示
+<div align="center">
+  <img src="docs/media/demo.gif" alt="TokenStar 实时 WebGL 星空演示" width="100%" />
+  <br />
+  <img src="docs/media/sky-card.png" alt="TokenStar 2x 纪念星空卡片" width="100%" />
+</div>
+-->
+
 ## 核心特性
 
 - **WebGL 1.0 实时光学星图渲染**：6 套 GPU 着色程序协同绘制倾斜银河全景、视差深空星表、世界空间 FBM 发射/反射星云、Moffat PSF 光学星点（带哈勃/韦布式十字/八芒色散星芒）、前景星尘粒子，以及沿星座键流动的微光脉冲。
 - **单次请求成星 · 星座互不重叠**：根据会话体量自适应呈丝状星弧、多星团 OB 协星或疏散星团形态（`starLayout.ts`），使用 Prim 最小生成树连接对话节点（`constellations.ts`），并通过二维圆填充隔离确保不同会话星群互不遮挡。
+- **子代理伴星团与潮汐桥联动**：单会话内庞大的子代理调用会自动聚合成独立绕行的伴星团，以弧形潮汐光桥精确溯源至发起它的父请求；支持点击、顶栏切换或近距离放大自动 LOD 展开为近圆形星团（`zoom >= 1.15`），缩小视野、点击空白或按 `Esc` 即可平滑收起。
+- **对数空间丝滑缩放与极限缩出防过曝**：以光标为世界坐标锚点在对数空间内平滑插值缩放；采用预乘滤色混合与相对全景倍率的自适应核径收敛，确保缩到最小时密集星团依然颗粒分明，同时 100% 保留默认视野下的星空亮度与对比。
 - **五类天体行为隐喻**：依据错误比例、子代理协同、工具调用密度与轻量交互特征，自动划分主序恒星、双星、斜转子脉冲星、引力透镜黑洞与太阳风彗星。
 - **真实天体物理视觉映射**：结合全局对数相对分位与绝对对数标度区分 Token 用量等级，并基于现实 **O-B-A-F-G-K-M** 恒星黑体辐射光谱（约 30,000K O 型蓝巨星至 3,100K M 型红巨星）呈现细腻色温分布。
-- **天文台级交互与导出**：支持平滑平移惯性滑行、指针居中缩放、时间轴演化回放、星体/模型/关键词/日期高亮筛选、赤道坐标网格 / 连线 / 星云显隐开关、隐私脱敏模式，以及 2x PNG 星空壁纸 / 纪念卡片导出。
+- **天文台级交互与 2x 纪念卡片导出**：支持平滑平移惯性滑行、时间轴演化回放、星体/模型/关键词/日期高亮筛选、赤道坐标网格 / 连线 / 星云显隐开关、隐私脱敏模式，以及 **2x PNG 星空壁纸 / 纪念卡片导出**（MCP 模式直接保存至系统下载目录）。
+- **插件内检查更新与一键升级**：点击顶栏更新按钮即可检查 GitHub 最新 Release 并支持原地升级与回滚保护。
 - **双模无缝传输**：在 Antigravity iframe 内通过 SEP-1865 MCP App JSON-RPC（`@modelcontextprotocol/ext-apps`）通信；在独立浏览器访问时自动切换为本地 HTTP 接口（`/api/sky-data`、`/api/refresh`）。
 
 ## 天文映射规则
@@ -64,7 +77,7 @@ flowchart LR
 
 - **严格只读扫描**：仅以只读方式解析 `~/.gemini/antigravity/brain`（可通过 `TOKENSTAR_BRAIN_DIR` 或 `--brain-dir` 覆盖）与 `~/.gemini/tmp`，绝不写入、修改或删除任何对话日志与宿主文件。
 - **零侵入安装**：安装脚本仅将文件部署至独立插件目录 `~/.gemini/config/plugins/tokenstar`，绝不改写 `~/.gemini/config/config.json` 或任何 Antigravity 核心文件。
-- **100% 离线自包含界面**：构建产物 `dist/app.html` 将全部 JS、CSS 与着色器内联于单个 HTML 文件中（约 831 KiB，`< 10 MiB` 上限），不含任何外部网络或 CDN 引用。
+- **100% 离线自包含界面与按需检查更新**：构建产物 `dist/app.html` 将全部 JS、CSS 与着色器内联于单个 HTML 文件中（约 883 KiB，`< 10 MiB` 上限），日常运行不含任何外部 CDN 或遥测请求；仅在用户主动点击顶栏“检查更新”时请求 GitHub Releases 接口。
 - **纯内存增量索引**：文件指纹与汇总索引仅在服务端进程内存中缓存。
 
 ## 环境要求
@@ -171,6 +184,13 @@ cd gemini-tokenstar-plugin
 - 在右侧辅助栏右上角 **`+`** 菜单中选择 **TokenStar** 侧边打开；
 - 在对话中直接让助手调用 `open_tokenstar` 打开交互视图。
 
+#### 插件内一键更新（`v0.1.2+`）
+
+点击顶部栏更新图标即可检查 GitHub Releases 最新版本并原地完成升级：
+
+- **仅前端改动**：重新打开 TokenStar 视图即可生效；
+- **包含后端改动**：更新后按提示关闭并重新打开 Antigravity 即可加载新版本后端。
+
 #### 卸载插件
 
 直接删除插件隔离目录即可（无任何全局配置残留）：
@@ -231,7 +251,8 @@ tokenstar-plugin/
 │   │   ├── sources/        # Antigravity / Gemini CLI 只读日志适配器
 │   │   ├── classifier.py   # 严格优先级天体分类器
 │   │   ├── config.py       # 分类阈值与默认路径配置
-│   │   ├── scanner.py      # 子代理树汇总与内存增量扫描缓存
+│   │   ├── scanner.py      # 子代理树、父请求精准归因与内存增量扫描缓存
+│   │   ├── updater.py      # GitHub Release 更新检查与安全原地升级
 │   │   ├── mcp_server.py   # SEP-1865 MCP App 服务端 (tokenstar-mcp)
 │   │   └── web_server.py   # 独立 Web HTTP 服务端 (tokenstar-web)
 │   └── tests/              # Pytest 单元测试与服务集成测试
@@ -239,7 +260,9 @@ tokenstar-plugin/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── sky/        # WebGL 1.0 渲染器、2D 叠层、HUD 与详情抽屉
-│   │   │   └── stats/      # 每日热力图、模型分布与会话统计表
+│   │   │   ├── stats/      # 每日热力图、模型分布与会话统计表
+│   │   │   ├── TopBar.tsx  # 顶部导航栏、实时刷新与版本更新入口
+│   │   │   └── UpdateModal.tsx # 插件内更新状态与一键升级弹窗
 │   │   ├── logic/          # 星图布局算法、MST 连线与多维过滤统计
 │   │   └── services/       # MCP App / HTTP 双模传输层
 │   └── package.json
