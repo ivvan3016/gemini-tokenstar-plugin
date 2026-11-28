@@ -33,15 +33,11 @@ It runs natively as an **Antigravity MCP App plugin** (`tokenstar-mcp`) directly
 
 ## Highlights
 
-- **Real-Time WebGL 1.0 Optical Sky:** Six coordinated GPU shader programs render a tilted galactic panorama, parallax starfield catalog, world-space FBM emission/reflection nebulae, animated optical star PSFs with Hubble/JWST diffraction spikes, foreground cosmic dust motes, and smooth starlight sweeps along constellation bonds.
-- **1 Request = 1 Star Constellations:** Conversations are laid out as distinct filament arcs, OB associations, and core-halo open clusters connected by Prim's Minimum Spanning Tree (`starLayout.ts` / `constellations.ts`), packed cleanly in 2D without inter-conversation overlap.
-- **Subagent Companion Globular Clusters & Tidal Bridges:** Multi-step subagent sessions aggregate into distinct orbiting companion globular clusters linked to their exact spawning parent request via curved tidal bridges (`buildSubagentClusters`), smoothly unfolding into near-circular open clusters on click, HUD toggle, or close-zoom auto-LOD (`zoom >= 1.15`) and collapsing cleanly on zoom-out, empty-sky clicks, or `Escape`.
-- **Silky Log-Space Zoom & Adaptive Min-Zoom Clarity:** Cursor-anchored logarithmic wheel interpolation glides smoothly across every zoom level, while premultiplied screen blending (`ONE, ONE_MINUS_SRC_COLOR`) and relative zoom-out optical compression keep dense panoramic clusters crisp at minimum zoom without dulling default-view brilliance.
-- **5 Celestial Archetypes:** Deterministically classifies both individual model requests and full conversations into main-sequence stars, binary star pairs, oblique-rotator pulsars, lensed black holes, and solar-wind comets.
-- **Real Stellar Astrophysics Visuals:** Maps request token volume to relative + logarithmic magnitude/size scaling, and assigns Morgan-Keenan **O-B-A-F-G-K-M** blackbody colors (~30,000K sapphire blue to ~3,100K crimson) anchored by model family with natural H-R temperature dispersion.
-- **Interactive Observatory Controls & 2x Export:** Pan, inertial glide, timeline epoch playback, multi-facet filtering (model, date, celestial type, search), equatorial RA/Dec grid / constellation / nebula HUD toggles, privacy mode, and **2x PNG wallpaper / commemorative card export** (saving directly to OS Downloads in MCP mode or browser download).
-- **In-Plugin Update Check & One-Click Self-Update:** Check for new GitHub Releases right inside the top bar (`UpdateModal`) and apply updates in-place with rollback protection.
-- **Dual-Mode Architecture:** Communicates via SEP-1865 MCP App JSON-RPC (`@modelcontextprotocol/ext-apps`) inside Antigravity iframes and automatically falls back to local HTTP endpoints (`/api/sky-data`, `/api/refresh`) when opened standalone.
+- **Your Token Usage as a Living Starry Sky:** Every model request becomes a real-time WebGL star, and every conversation connects into its own constellation across a deep galactic panorama.
+- **Five Cosmic Forms & Companion Clusters:** Conversations and requests naturally take shape as main-sequence stars, orbiting binary stars & subagent clusters, pulsars, lensed black holes, and comets based on how you work with AI.
+- **Brightness & Color Driven by Telemetry:** Higher token usage shines brighter and larger, while different model families glow across real stellar blackbody hues from sapphire blue to warm crimson.
+- **Explore, Analyze & Share:** Smoothly pan and zoom your sky, replay your coding history over time, inspect daily heatmaps and token breakdowns, and export 2x PNG starry-sky wallpapers or commemorative cards.
+- **100% Local & Built for Antigravity:** Strictly read-only local log scanning with zero telemetry; runs natively inside Antigravity (with built-in update checks) or standalone in any browser.
 
 ## Astronomical Encoding
 
